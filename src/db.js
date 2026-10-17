@@ -21,6 +21,7 @@ function getDb() {
 }
 
 function withTransaction(d, fn) {
+  if (d.isTransaction) return fn();
   d.exec('BEGIN IMMEDIATE');
   try {
     const result = fn();
