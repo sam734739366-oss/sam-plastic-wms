@@ -31,3 +31,17 @@ import './screens/users.js';
 import './screens/settings.js';
 
 go('dashboard');
+
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target.closest('.nav-item, .btn');
+  if (!t) return;
+  const rect = t.getBoundingClientRect();
+  const size = Math.max(rect.width, rect.height);
+  const span = document.createElement('span');
+  span.className = 'ripple';
+  span.style.width = span.style.height = size + 'px';
+  span.style.left = (e.clientX - rect.left - size / 2) + 'px';
+  span.style.top = (e.clientY - rect.top - size / 2) + 'px';
+  t.appendChild(span);
+  setTimeout(() => span.remove(), 600);
+});
