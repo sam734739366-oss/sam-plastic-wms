@@ -13,7 +13,11 @@ const UNIT_OPTIONS = {
 
 function num(v) {
   if (v === '' || v === null || v === undefined) return '';
-  const n = parseFloat(String(v).replace(',', '.'));
+  const s = String(v)
+    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+    .replace(/٬/g, '').replace(/,/g, '.');
+  const n = parseFloat(s);
   return Number.isFinite(n) ? n : '';
 }
 
@@ -101,14 +105,14 @@ function collect(back) {
 }
 
 function parseCsv(text) {
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const rows = [];
   for (const line of lines) {
     const cells = line.split(/[;,\t]/).map(c => (c || '').trim());
     if (!cells[0] || /^(كود|code)$/i.test(cells[0])) continue;
     if (cells.length < 3) continue;
     const [code, name, groupStr, unit, weight, carton, bag, price, recycled, brand, size, notes] = cells;
-    const group = Number(groupStr);
+    const group = Number(num(groupStr));
     if (!(group >= 1 && group <= 5)) continue;
     rows.push({
       code, name, item_group: group, unit_name: unit || 'حبة',
