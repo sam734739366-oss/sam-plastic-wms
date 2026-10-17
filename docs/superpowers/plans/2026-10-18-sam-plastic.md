@@ -4,9 +4,11 @@
 
 **Goal:** برنامج سطح مكتب ويندوز «سام بلاستيك» لإدارة مصنع نفخ عبوات بلاستيكية: مخازن، مشتريات، مبيعات، تصاريح صرف/استلام، نفخ للغير، تقارير وطباعة.
 
-**Architecture:** Electron (main + preload + renderer بدون bundler) مع SQLite عبر better-sqlite3. كل منطق الأعمال (تحويلات الوحدات، حركات المخزون) في وحدات JS نقية قابلة للاختبار بـ node:test. الأرصدة تُحسب من دفتر `stock_moves` (append-only مع reversals). الطباعة عبر نافذة print.html + قوالب HTML بمقاس A4/A5.
+**Architecture:** Electron (main + preload + renderer بدون bundler) مع SQLite. كل منطق الأعمال (تحويلات الوحدات، حركات المخزون) في وحدات JS نقية قابلة للاختبار بـ node:test. الأرصدة تُحسب من دفتر `stock_moves` (append-only مع reversals). الطباعة عبر نافذة print.html + قوالب HTML بمقاس A4/A5.
 
-**Tech Stack:** Electron (أحدث إصدار مستقر)، better-sqlite3، bcryptjs، @electron/rebuild، node:test. بدون إطار عمل للواجهة — HTML/CSS/JS عربي RTL.
+**Tech Stack:** Electron (أحدث إصدار مستقر)، SQLite، bcryptjs، node:test. بدون إطار عمل للواجهة — HTML/CSS/JS عربي RTL.
+
+> **قرار تقني (نُفّذ في المرحلة 1):** قاعدة البيانات عبر `node:sqlite` المدمج (DatabaseSync) بدل better-sqlite3 — الجهاز لا يملك مترجم MSVC والوحدة الأصلية لا تملك ملفات مبنية جاهزة لإصدار Electron الحالي. بديل `db.transaction()` هو `withTransaction(db, fn)` من `src/db.js` (BEGIN IMMEDIATE/COMMIT/ROLLBACK يدوي). كل `require('better-sqlite3')` في هذه الخطة يُقرأ `require('node:sqlite')` مع `DatabaseSync`، وكل `db.pragma(x)` يصبح `db.exec('PRAGMA ' + x)`.
 
 **Spec:** `docs/superpowers/specs/2026-10-18-sam-plastic-design.md`
 
