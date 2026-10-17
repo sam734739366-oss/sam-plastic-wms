@@ -5,6 +5,8 @@ const bcrypt = require('bcryptjs');
 
 let db = null;
 
+function setDb(d) { db = d; }
+
 function getDb() {
   if (db) return db;
   const dataDir = path.join(__dirname, '..', 'data');
@@ -50,4 +52,4 @@ function seed(d) {
   if (!s.get('currency')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('currency', 'ريال يمني');
 }
 
-module.exports = { getDb, withTransaction };
+module.exports = { getDb, setDb, withTransaction };
