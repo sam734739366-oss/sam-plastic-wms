@@ -1,0 +1,32 @@
+{
+  "name": "sam-plastic",
+  "version": "0.1.0",
+  "description": "برنامج سام بلاستيك لإدارة مصنع نفخ العبوات البلاستيكية",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/units.test.js tests/stock.test.js",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.samplastic.app",
+    "productName": "سام بلاستيك",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  },
+  "dependencies": {
+    "bcryptjs": "latest"
+  }
+}

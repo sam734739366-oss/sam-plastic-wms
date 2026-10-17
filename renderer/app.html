@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'">
+<title>سام بلاستيك</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">سام بلاستيك</div>
+    <nav id="nav">
+      <a data-screen="dashboard" class="nav-item">الرئيسية</a>
+      <div class="nav-group">البيانات الأساسية</div>
+      <a data-screen="items" class="nav-item">الأصناف</a>
+      <a data-screen="parties" class="nav-item">الموردون والعملاء</a>
+      <a data-screen="warehouses" class="nav-item">المخازن</a>
+      <a data-screen="machines" class="nav-item">المكائن</a>
+      <a data-screen="shifts" class="nav-item">الورديات</a>
+      <div class="nav-group">الحركات</div>
+      <a data-screen="purchases" class="nav-item">فواتير الشراء</a>
+      <a data-screen="issues" class="nav-item">تصاريح الصرف للإنتاج</a>
+      <a data-screen="production" class="nav-item">نتيجة الإنتاج</a>
+      <a data-screen="receives" class="nav-item">استلام الإنتاج التام</a>
+      <a data-screen="sales" class="nav-item">فواتير البيع</a>
+      <a data-screen="exits" class="nav-item">تصاريح الخروج</a>
+      <a data-screen="scrap" class="nav-item">التالف ومصيره</a>
+      <a data-screen="tolling" class="nav-item">النفخ للغير</a>
+      <a data-screen="transfers" class="nav-item">نقل بين المخازن</a>
+      <div class="nav-group">التقارير</div>
+      <a data-screen="stock" class="nav-item">المخزون</a>
+      <a data-screen="reports" class="nav-item">التقارير</a>
+      <a data-screen="audit" class="nav-item">سجل التدقيق</a>
+      <div class="nav-group">النظام</div>
+      <a data-screen="users" class="nav-item">المستخدمون</a>
+      <a data-screen="settings" class="nav-item">الإعدادات</a>
+    </nav>
+    <div class="sidebar-footer"><span id="current-user"></span><button id="logout" class="btn small">خروج</button></div>
+  </aside>
+  <main id="screen" class="screen"></main>
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
