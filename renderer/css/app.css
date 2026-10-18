@@ -290,3 +290,5 @@ textarea { min-height: 56px; resize: vertical; }
 .error { color: var(--danger); font-size: 13px; font-weight: 600; }
 .muted { color: var(--muted); font-size: 13px; }
 .void-badge { color: var(--danger); font-weight: 700; }
+
+.section-title { font-size: 16px; margin: 18px 0 8px; color: var(--text); }
