@@ -2,7 +2,7 @@ import { register } from '../router.js';
 import { api } from '../api.js';
 import { toast, renderTable, esc } from '../ui.js';
 
-const ACTION_LABEL = { create: 'إضافة', update: 'تعديل', delete: 'حذف', void: 'إلغاء', login: 'دخول' };
+const ACTION_LABEL = { create: 'إضافة', update: 'تعديل', delete: 'حذف', void: 'إلغاء', login: 'دخول', stock_write: 'تسجيل حركة مخزون' };
 
 register('audit', {
   title: 'سجل التدقيق',
