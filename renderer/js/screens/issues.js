@@ -187,7 +187,7 @@ register('issues', {
       const isCustomer = () => back.querySelector('#f-source').value === 'customer';
       const applySource = () => {
         back.querySelector('#w-party').style.display = isCustomer() ? '' : 'none';
-        [...rowsWrap.querySelectorAll('.irow')].forEach(r => refreshRow(r));
+        [...rowsWrap.querySelectorAll('.irow')].forEach(r => r._refresh && r._refresh());
       };
       back.querySelector('#f-source').onchange = applySource;
 
@@ -268,6 +268,7 @@ register('issues', {
         itemSel.onchange = refreshRow;
         whSel.onchange = refreshRow;
         unitSel.onchange = refreshRow;
+        row._refresh = refreshRow;
         if (data.item_id) itemSel.value = String(data.item_id);
         if (data.warehouse_id) whSel.value = String(data.warehouse_id);
         refreshRow();
