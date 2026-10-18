@@ -5,13 +5,21 @@ const bcrypt = require('bcryptjs');
 
 let db = null;
 
+function dataDir() {
+  try {
+    const { app } = require('electron');
+    if (app && app.isPackaged) return app.getPath('userData');
+  } catch { /* plain node (tests) */ }
+  return path.join(__dirname, '..', 'data');
+}
+
 function setDb(d) { db = d; }
 
 function getDb() {
   if (db) return db;
-  const dataDir = path.join(__dirname, '..', 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-  db = new DatabaseSync(path.join(dataDir, 'samplastic.db'));
+  const dir = dataDir();
+  fs.mkdirSync(dir, { recursive: true });
+  db = new DatabaseSync(path.join(dir, 'samplastic.db'));
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
@@ -53,4 +61,4 @@ function seed(d) {
   if (!s.get('currency')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('currency', 'ريال يمني');
 }
 
-module.exports = { getDb, setDb, withTransaction };
+module.exports = { getDb, setDb, withTransaction, dataDir };

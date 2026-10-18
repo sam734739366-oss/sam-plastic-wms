@@ -29,6 +29,7 @@ import './screens/reports.js';
 import './screens/audit.js';
 import './screens/users.js';
 import './screens/settings.js';
+import './screens/backup.js';
 
 go('dashboard');
 

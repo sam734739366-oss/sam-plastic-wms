@@ -22,6 +22,7 @@ register('settings', {
           <option value="A4" ${s.report_page_size === 'A4' ? 'selected' : ''}>A4</option>
           <option value="A5" ${s.report_page_size === 'A5' ? 'selected' : ''}>A5</option>
         </select></label>
+        <label class="field full"><span>المجلد السحابي (تُنسخ إليه النسخ الاحتياطية تلقائياً — OneDrive أو ما شابه)</span><input id="f-cloud" value="${esc(s.cloud_folder || '')}" placeholder="مثال: C:\Users\Elite\OneDrive\سام بلاستيك"></label>
       </div>
       <div class="actions"><button id="save" class="btn primary">حفظ الإعدادات</button></div>
     </div>`;
@@ -33,7 +34,8 @@ register('settings', {
           factory_address: el.querySelector('#f-address').value,
           currency: el.querySelector('#f-currency').value,
           doc_page_size: el.querySelector('#f-docsize').value,
-          report_page_size: el.querySelector('#f-reportsize').value
+          report_page_size: el.querySelector('#f-reportsize').value,
+          cloud_folder: el.querySelector('#f-cloud').value
         }, currentUser().id);
         toast('تم حفظ الإعدادات', 'ok');
       } catch (e) { toast(e.message, 'err'); }

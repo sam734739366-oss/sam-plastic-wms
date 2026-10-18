@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const templates = require('./src/print/templates');
+const backup = require('./src/backup');
 
 function createMainWindow() {
   const win = new BrowserWindow({
@@ -52,7 +53,10 @@ app.whenReady().then(() => {
   require('./src/db').getDb();
   require('./src/ipc')(ipcMain);
   createMainWindow();
+  setInterval(() => { try { backup.createBackup(); } catch { /* ignore */ } }, 24 * 60 * 60 * 1000);
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createMainWindow(); });
 });
+
+app.on('before-quit', () => { try { backup.createBackup(); } catch { /* ignore */ } });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
