@@ -73,7 +73,8 @@ register('sales', {
             <td>${Number(it.unit_price || 0).toLocaleString('en-US')}</td>
             <td>${Number(it.total_price || 0).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
-          [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
+          [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'invoice', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
+            { label: 'إغلاق', onClick: (b) => b.remove() }]);
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 

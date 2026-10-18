@@ -78,7 +78,8 @@ register('issues', {
             <td>${esc(it.quantity)} ${esc(it.unit)}</td><td>${esc(it.pieces)}</td><td>${esc(it.weight_kg)}</td>
             <td>${it.carton_ids.map(c => `<span class="tag recycled">${esc(c)}</span>`).join(' ') || '—'}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
-          [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
+          [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'issue', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
+            { label: 'إغلاق', onClick: (b) => b.remove() }]);
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 

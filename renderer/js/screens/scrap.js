@@ -50,7 +50,8 @@ register('scrap', {
             <b>الحبات:</b> ${Number(doc.pieces).toLocaleString('en-US')} &nbsp; <b>الوزن:</b> ${Number(doc.weight_kg || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })} كجم
             ${doc.price ? `&nbsp; <b>السعر:</b> ${Number(doc.price).toLocaleString('en-US')}` : ''}</p>
           ${doc.notes ? `<p><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
-          [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
+          [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'scrap', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
+            { label: 'إغلاق', onClick: (b) => b.remove() }]);
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 

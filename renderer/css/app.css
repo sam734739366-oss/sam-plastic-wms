@@ -267,6 +267,10 @@ textarea { min-height: 56px; resize: vertical; }
   border-color: transparent; box-shadow: 0 2px 7px rgba(15, 118, 110, .35);
 }
 .toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.toolbar .spacer { flex: 1; }
+.form-grid.inline { display: flex; gap: 14px; flex-wrap: wrap; }
+.form-grid.inline .field { margin-bottom: 0; }
+.summary-line { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
 
 /* ===== بنود المستندات (شراء/صرف) ===== */
 .prows-head, .prow {

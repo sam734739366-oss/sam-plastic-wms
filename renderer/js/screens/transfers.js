@@ -57,7 +57,8 @@ register('transfers', {
             <td>${esc(it.quantity)} ${esc(it.unit)}</td><td>${Number(it.pieces).toLocaleString('en-US')}</td>
             <td>${Number(it.weight_kg || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
-          [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
+          [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'transfer', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
+            { label: 'إغلاق', onClick: (b) => b.remove() }]);
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 

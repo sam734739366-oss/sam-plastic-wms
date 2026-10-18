@@ -1,0 +1,167 @@
+const test = require('node:test');
+const assert = require('node:assert');
+const { DatabaseSync } = require('node:sqlite');
+const fs = require('fs');
+const path = require('path');
+const { setDb } = require('../src/db');
+const { getBalance } = require('../src/stock');
+const templates = require('../src/print/templates');
+
+function makeDb() {
+  const d = new DatabaseSync(':memory:');
+  d.exec(fs.readFileSync(path.join(__dirname, '..', 'src', 'schema.sql'), 'utf8'));
+  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES (?,?,?,?)")
+    .run('admin', 'المدير', 'x', 'manager');
+  d.prepare('INSERT INTO warehouses (name) VALUES (?)').run('مخزن الإنتاج التام');
+  d.prepare('INSERT INTO warehouses (name) VALUES (?)').run('مخزن المحرز');
+  d.prepare('INSERT INTO items (code, name, item_group, unit_name, weight_grams, pieces_per_bag) VALUES (?,?,?,?,?,?)')
+    .run('002-001', 'عبوة 5 لتر', 2, 'عبوة', 52, 100);
+  d.prepare('INSERT INTO items (code, name, item_group, unit_name, weight_grams) VALUES (?,?,?,?,?)')
+    .run('005-001', 'تالف عبوة', 5, 'حبة', 52);
+  d.prepare("INSERT INTO parties (name, type) VALUES (?,?)").run('مورد تجريبي', 'supplier');
+  d.prepare("INSERT INTO parties (name, type) VALUES (?,?)").run('عميل تجريبي', 'customer');
+  return d;
+}
+
+function stubIpc(files) {
+  const handlers = {};
+  for (const f of files) {
+    require(`../src/handlers/${f}`)({ handle: (ch, fn) => { handlers[ch] = fn; } });
+  }
+  return handlers;
+}
+
+function stockIn(db, h, warehouseId, itemId, pieces) {
+  h['purchases:save'](null, {
+    doc_number: `P-${Math.random().toString(36).slice(2, 8)}`, doc_date: '2026-10-18',
+    items: [{ item_id: itemId, warehouse_id: warehouseId, quantity: pieces, unit: 'piece' }]
+  }, 1);
+}
+
+test('reports:inventory returns balances with labels and group filter', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'reports']);
+  stockIn(db, h, 1, 1, 1500);
+  const all = h['reports:inventory'](null, {});
+  const row = all.find(r => r.id === 1);
+  assert.equal(row.balance_pieces, 1500);
+  assert.ok(row.balance_label.includes('عبوة'));
+  const grouped = h['reports:inventory'](null, { group: 5 });
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].code, '005-001');
+  const wh = h['reports:inventory'](null, { warehouseId: 2 });
+  assert.equal(wh.find(r => r.id === 1).balance_pieces, 0);
+});
+
+test('reports:movement computes running balance in date order', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'sales', 'reports']);
+  h['purchases:save'](null, {
+    doc_number: 'P-1', doc_date: '2026-10-10',
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 1000, unit: 'piece' }]
+  }, 1);
+  h['sales:save'](null, {
+    doc_number: '1', doc_date: '2026-10-12', invoice_type: 'sale', party_id: 2,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 400, unit: 'piece', unit_price: 10 }]
+  }, 1);
+  const rows = h['reports:movement'](null, { itemId: 1 });
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].balance_pieces, 1000);
+  assert.equal(rows[1].balance_pieces, 600);
+  assert.equal(rows[1].doc_type, 'invoice');
+});
+
+test('reports:production lists results with carton, issue and totals', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'issues', 'production', 'reports']);
+  db.prepare('UPDATE items SET pieces_per_carton=100 WHERE id=1').run();
+  const { id: purchaseId } = h['purchases:save'](null, {
+    doc_number: 'P-1', doc_date: '2026-10-10', party_id: 1,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'carton', carton_prefix: 'KR' }]
+  }, 1);
+  const cartons = db.prepare('SELECT * FROM cartons WHERE purchase_id=? ORDER BY id').all(purchaseId);
+  assert.equal(cartons.length, 2);
+  const { id: issueId } = h['issues:save'](null, {
+    doc_number: 'I-1', doc_date: '2026-10-11', source: 'own',
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'carton', carton_ids: cartons.map(c => c.carton_number) }]
+  }, 1);
+  assert.equal(issueId > 0, true);
+  h['production:save'](null, {
+    carton_id: cartons[0].id, result_date: '2026-10-11',
+    good_pieces: 90, defect_before: 5, defect_after: 4
+  }, 1);
+  const rows = h['reports:production'](null, { from: '2026-10-01', to: '2026-10-31' });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].carton_number, cartons[0].carton_number);
+  assert.equal(rows[0].issue_number, 'I-1');
+  assert.equal(rows[0].total_pieces, 99);
+  assert.equal(h['reports:production'](null, { from: '2026-11-01' }).length, 0);
+});
+
+test('reports:scrap lists active scrap with disposition labels data', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'scrap', 'reports']);
+  stockIn(db, h, 1, 2, 300);
+  h['scrap:save'](null, {
+    doc_number: 'S-1', doc_date: '2026-10-15', item_id: 2,
+    disposition: 'to_recycled', warehouse_id: 1, pieces: 50, weight_kg: 2.6
+  }, 1);
+  const rows = h['reports:scrap'](null, {});
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].disposition, 'to_recycled');
+  assert.equal(rows[0].pieces, 50);
+});
+
+test('reports:purchases and reports:sales aggregate totals', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'sales', 'reports']);
+  h['purchases:save'](null, {
+    doc_number: 'P-1', doc_date: '2026-10-10', party_id: 1,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 100, unit: 'piece', unit_price: 5 }]
+  }, 1);
+  h['sales:save'](null, {
+    doc_number: '1', doc_date: '2026-10-12', invoice_type: 'sale', party_id: 2,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 40, unit: 'piece', unit_price: 12 }]
+  }, 1);
+  const p = h['reports:purchases'](null, { from: '2026-10-01' });
+  assert.equal(p.total, 500);
+  assert.equal(p.total_pieces, 100);
+  const s = h['reports:sales'](null, { from: '2026-10-01' });
+  assert.equal(s.total, 480);
+  assert.equal(s.rows[0].invoice_type, 'sale');
+  assert.equal(h['reports:sales'](null, { partyId: 1 }).rows.length, 0);
+});
+
+test('reports:audit returns audit rows with user name', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'reports']);
+  stockIn(db, h, 1, 1, 100);
+  const rows = h['reports:audit'](null, { from: '2026-10-01' });
+  assert.ok(rows.length >= 1);
+  const top = rows[0];
+  assert.equal(top.entity, 'purchase');
+  assert.equal(top.user_name, 'المدير');
+  assert.equal(h['reports:audit'](null, { userId: 999 }).length, 0);
+});
+
+test('print templates escape values and use factory settings', () => {
+  const settings = { factory_name: 'مصنع سام بلاستيك', doc_page_size: 'A5' };
+  const doc = {
+    doc_number: 'P-1', doc_date: '2026-10-10', party_name: 'مورد <b>غريب</b>',
+    notes: '<script>alert(1)</script>',
+    items: [{ code: '002-001', name: 'عبوة 5 لتر', quantity: 10, unit: 'كرتون', pieces: 1000, weight_kg: 52, unit_price: 500, total_price: 5000 }]
+  };
+  const html = templates.purchaseTemplate(doc, settings);
+  assert.ok(html.includes('مصنع سام بلاستيك'));
+  assert.ok(html.includes('فاتورة شراء'));
+  assert.ok(!html.includes('<script>alert(1)</script>'));
+  assert.ok(!html.includes('<b>غريب</b>'));
+  assert.ok(html.includes('&lt;script&gt;'));
+  assert.ok(html.includes('المستلم'));
+  const report = templates.reportTemplate(settings, 'جرد', ['تاريخ: 2026-10-10'], ['الصنف', 'الرصيد'], [['عبوة', '100']]);
+  assert.ok(report.includes('جرد'));
+  assert.ok(!report.includes('المستلم'));
+  const issue = templates.issueTemplate({ doc_number: 'I-1', doc_date: '2026-10-11', machine_name: 'مكينة 1', shift_name: 'صباح', items: [{ code: '002-001', name: 'عبوة', quantity: 1, unit: 'كرتون', pieces: 100, weight_kg: 5.2, carton_ids: ['KR-001'] }] }, settings);
+  assert.ok(issue.includes('KR-001'));
+  assert.ok(issue.includes('مكينة 1'));
+});
