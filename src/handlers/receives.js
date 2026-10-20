@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc } = require('../stock');
+const { writeMoves, voidDoc, applySalemDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 module.exports = function register(ipcMain) {
@@ -47,7 +47,9 @@ module.exports = function register(ipcMain) {
     const before = isNew ? null : db.prepare('SELECT * FROM receive_permits WHERE id=?').get(doc.id);
     let id = doc.id;
     withTransaction(db, () => {
+      let oldItems = [];
       if (id) {
+        oldItems = db.prepare('SELECT * FROM receive_items WHERE receive_permit_id=?').all(id);
         db.prepare('DELETE FROM receive_items WHERE receive_permit_id=?').run(id);
         db.prepare(`UPDATE receive_permits SET doc_number=?, doc_date=?, machine_id=?, shift_id=?, receiver_name=?, source=?, party_id=?, notes=? WHERE id=?`)
           .run(number, doc.doc_date, doc.machine_id || null, doc.shift_id || null,
@@ -65,7 +67,6 @@ module.exports = function register(ipcMain) {
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
-        if (item.item_group !== 2) throw new Error(`الصنف ${item.code} ليس من الإنتاج التام`);
         const pieces = toPieces(it.quantity, it.unit, item);
         if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
@@ -75,6 +76,9 @@ module.exports = function register(ipcMain) {
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, it.notes || null);
       }
       writeMoves(db, 'receive', id, number, doc.doc_date, moves, userId);
+      // استلام إنتاج المصنع يزيد السليم (وعكس القديم عند التعديل)
+      if (oldItems.length) applySalemDelta(db, oldItems, -1);
+      applySalemDelta(db, moves, 1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'receive_permit', id, before, doc);
     return { id };
@@ -84,8 +88,10 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     const before = db.prepare('SELECT * FROM receive_permits WHERE id=?').get(id);
     if (!before) throw new Error('التصريح غير موجود');
+    const oldItems = db.prepare('SELECT * FROM receive_items WHERE receive_permit_id=?').all(id);
     withTransaction(db, () => {
       voidDoc(db, 'receive', id, userId);
+      if (before.source === 'own') applySalemDelta(db, oldItems, -1);
       db.prepare(`UPDATE receive_permits SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'receive_permit', id, before, null);

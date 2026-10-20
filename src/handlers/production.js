@@ -1,5 +1,6 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
+const { bucketsDelta } = require('../stock');
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('production:pending', () => {
@@ -55,6 +56,8 @@ module.exports = function register(ipcMain) {
     if (carton.status === 'in_stock') throw new Error('الكرتون ليس مصروفاً للإنتاج');
     if (!previous && carton.status !== 'issued') throw new Error('الكرتون ليس مصروفاً أو نتيجته مسجلة');
     const total = good + before + after;
+    const oldDefects = previous ? (Number(previous.defect_before) || 0) + (Number(previous.defect_after) || 0) : 0;
+    const newDefects = before + after;
     withTransaction(db, () => {
       if (previous) {
         db.prepare(`UPDATE production_results SET issue_permit_id=?, machine_id=?, shift_id=?, result_date=?,
@@ -71,6 +74,10 @@ module.exports = function register(ipcMain) {
             good, before, after, data.notes || null, userId);
       }
       db.prepare(`UPDATE cartons SET status='finished' WHERE id=?`).run(data.carton_id);
+      // التالف المسجل في النتيجة يزيد رصيد تالف للصنف
+      if (newDefects !== oldDefects) {
+        bucketsDelta(db, carton.item_id, { talef: newDefects - oldDefects });
+      }
     });
     audit(db, userId, previous ? 'update' : 'create', 'production_result', data.carton_id, previous, data);
     return { ok: true, total, carton_pieces: carton.pieces, rest: carton.pieces - total };
@@ -80,9 +87,12 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     const previous = db.prepare('SELECT * FROM production_results WHERE carton_id=?').get(cartonId);
     if (!previous) throw new Error('لا توجد نتيجة لهذا الكرتون');
+    const carton = db.prepare('SELECT * FROM cartons WHERE id=?').get(cartonId);
+    const oldDefects = (Number(previous.defect_before) || 0) + (Number(previous.defect_after) || 0);
     withTransaction(db, () => {
       db.prepare('DELETE FROM production_results WHERE carton_id=?').run(cartonId);
       db.prepare(`UPDATE cartons SET status='issued' WHERE id=?`).run(cartonId);
+      if (oldDefects > 0) bucketsDelta(db, carton.item_id, { talef: -oldDefects });
     });
     audit(db, userId, 'delete', 'production_result', cartonId, previous, null);
     return { ok: true };

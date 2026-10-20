@@ -1,11 +1,7 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
 import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
-
-function today() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+import { fmtNum, today } from '../fmt.js';
 
 register('production', {
   title: 'نتيجة الإنتاج',
@@ -15,19 +11,20 @@ register('production', {
         api.invoke('production:pending'),
         api.invoke('production:done'),
       ]);
+      const restOf = (r) => r.pieces - (r.good_pieces + r.defect_before + r.defect_after);
       el.innerHTML = `
         <h2 class="section-title">كراتين بانتظار النتيجة</h2>
         <div id="pending-wrap"></div>
         <h2 class="section-title">نتائج مسجلة</h2>
         <div id="done-wrap"></div>`;
       renderTable(el.querySelector('#pending-wrap'), [
-        { key: 'carton_number', label: 'الكرتون' },
+        { key: 'carton_number', label: 'الكرتون', render: r => `<span dir="ltr">${esc(r.carton_number)}</span>` },
         { key: 'item_code', label: 'الكود', render: r => `${esc(r.item_code)} — ${esc(r.item_name)}` },
-        { key: 'issue_number', label: 'تصريح الصرف' },
+        { key: 'issue_number', label: 'تصريح الصرف', render: r => r.issue_number || '—' },
         { key: 'issue_date', label: 'تاريخ الصرف' },
         { key: 'machine_name', label: 'المكينة', render: r => r.machine_name || '—' },
         { key: 'shift_name', label: 'الوردية', render: r => r.shift_name || '—' },
-        { key: 'pieces', label: 'الحبات', render: r => Number(r.pieces).toLocaleString('en-US') },
+        { key: 'pieces', label: 'الحبات', render: r => fmtNum(r.pieces, 0) },
         { key: 'actions', label: '', render: r => `<button class="btn mini primary" data-result="${r.carton_id}">تسجيل النتيجة</button>` },
       ], pending);
       el.querySelectorAll('[data-result]').forEach(b => b.onclick = () => resultForm(Number(b.dataset.result), false));
@@ -35,17 +32,17 @@ register('production', {
         el.querySelector('#pending-wrap').innerHTML = '<p class="muted">لا توجد كراتين بانتظار النتيجة</p>';
       }
       renderTable(el.querySelector('#done-wrap'), [
-        { key: 'carton_number', label: 'الكرتون' },
+        { key: 'carton_number', label: 'الكرتون', render: r => `<span dir="ltr">${esc(r.carton_number)}</span>` },
         { key: 'item_code', label: 'الصنف', render: r => `${esc(r.item_code)} — ${esc(r.item_name)}` },
-        { key: 'issue_number', label: 'التصريح' },
+        { key: 'issue_number', label: 'التصريح', render: r => r.issue_number || '—' },
         { key: 'result_date', label: 'التاريخ' },
-        { key: 'good_pieces', label: 'سليم', render: r => Number(r.good_pieces).toLocaleString('en-US') },
-        { key: 'defect_before', label: 'تالف قبل', render: r => Number(r.defect_before).toLocaleString('en-US') },
-        { key: 'defect_after', label: 'تالف بعد', render: r => Number(r.defect_after).toLocaleString('en-US') },
+        { key: 'good_pieces', label: 'سليم', render: r => fmtNum(r.good_pieces, 0) },
+        { key: 'defect_before', label: 'تالف قبل', render: r => fmtNum(r.defect_before, 0) },
+        { key: 'defect_after', label: 'تالف بعد', render: r => fmtNum(r.defect_after, 0) },
         {
           key: 'rest', label: 'غير محسوب', render: r => {
-            const rest = r.pieces - (r.good_pieces + r.defect_before + r.defect_after);
-            return rest > 0 ? `<span class="tag new">${rest.toLocaleString('en-US')}</span>` : '—';
+            const rest = restOf(r);
+            return rest > 0 ? `<span class="tag new">${fmtNum(rest, 0)}</span>` : '—';
           }
         },
         { key: 'actions', label: '', render: r => `<button class="btn mini" data-edit="${r.carton_id}">تعديل</button>
@@ -76,7 +73,7 @@ register('production', {
           <p style="line-height:2">
             <b>الصنف:</b> ${esc(row.item_code)} — ${esc(row.item_name)} &nbsp;
             <b>التصريح:</b> ${esc(row.issue_number || '—')} &nbsp;
-            <b>حبات الكرتون:</b> ${Number(row.pieces).toLocaleString('en-US')}</p>
+            <b>حبات الكرتون:</b> ${fmtNum(row.pieces, 0)}</p>
           <div class="form-grid">
             <div class="field"><label>التاريخ *</label><input id="f-date" type="date" value="${esc(row.result_date || today())}"></div>
             <div class="field"><label>سليم</label><input id="f-good" type="number" min="0" value="${row.good_pieces ?? 0}"></div>
@@ -91,14 +88,14 @@ register('production', {
               const before = Number(b.querySelector('#f-before').value) || 0;
               const after = Number(b.querySelector('#f-after').value) || 0;
               const sum = good + before + after;
-              if (sum > row.pieces && !(await confirmDialog(`المجموع (${sum.toLocaleString('en-US')}) أكبر من حبات الكرتون (${Number(row.pieces).toLocaleString('en-US')}). متابعة الحفظ؟`))) return;
+              if (sum > row.pieces && !(await confirmDialog(`المجموع (${fmtNum(sum, 0)}) أكبر من حبات الكرتون (${fmtNum(row.pieces, 0)}). متابعة الحفظ؟`))) return;
               const res = await api.invoke('production:save', {
                 carton_id: cartonId,
                 result_date: b.querySelector('#f-date').value,
                 good_pieces: good, defect_before: before, defect_after: after,
                 notes: b.querySelector('#f-notes').value,
               }, currentUser().id);
-              const restMsg = res.rest > 0 ? ` — غير محسوب: ${res.rest.toLocaleString('en-US')}` : '';
+              const restMsg = res.rest > 0 ? ` — غير محسوب: ${fmtNum(res.rest, 0)}` : '';
               b.remove(); toast(`تم حفظ النتيجة${restMsg}`, 'ok'); await load();
             } catch (e) { toast(String(e.message || e), 'err'); }
           } }, { label: 'إلغاء', onClick: (b) => b.remove() }]);
@@ -109,7 +106,7 @@ register('production', {
           const sum = good + before + after;
           const rest = row.pieces - sum;
           back.querySelector('#sum-line').innerHTML =
-            `المجموع: <b>${sum.toLocaleString('en-US')}</b> من ${Number(row.pieces).toLocaleString('en-US')} حبة — ${rest > 0 ? `الباقي <b>${rest.toLocaleString('en-US')}</b> غير محسوب` : rest < 0 ? '<span class="error">تجاوز بعدد الحبات!</span>' : 'مكتمل'}`;
+            `المجموع: <b>${fmtNum(sum, 0)}</b> من ${fmtNum(row.pieces, 0)} حبة — ${rest > 0 ? `الباقي <b>${fmtNum(rest, 0)}</b> غير محسوب` : rest < 0 ? '<span class="error">تجاوز بعدد الحبات!</span>' : 'مكتمل'}`;
         };
         ['#f-good', '#f-before', '#f-after'].forEach(s => back.querySelector(s).oninput = update);
         update();
