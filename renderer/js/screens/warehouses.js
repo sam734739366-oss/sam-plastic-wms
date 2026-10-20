@@ -5,44 +5,90 @@ import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
 register('warehouses', {
   title: 'المخازن',
   async mount(el) {
-    el.innerHTML = `<div class="card">
-      <div class="page-head"><h2>المخازن</h2><button id="add" class="btn primary">إضافة مخزن</button></div>
-      <div id="tbl"></div></div>`;
-    async function load() {
-      const rows = await api.invoke('warehouses:list');
-      renderTable(document.getElementById('tbl'),
-        [{ label: 'الاسم', key: 'name' },
-         { label: 'الموقع', key: 'location' },
-         { label: 'ملاحظات', key: 'notes' },
-         { label: '', render: r => `<button class="btn small" data-edit="${r.id}">تعديل</button> <button class="btn small danger" data-del="${r.id}">حذف</button>` }],
-        rows);
-      el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => edit(rows.find(r => r.id == b.dataset.edit)));
-      el.querySelectorAll('[data-del]').forEach(b => b.onclick = () => del(b.dataset.del));
+    let rows = [];
+
+    el.innerHTML = `
+      <div class="toolbar">
+        <button class="btn primary" id="btn-add">+ إضافة مخزن</button>
+      </div>
+      <div id="summary" class="summary-line"></div>
+      <div id="table-wrap"></div>`;
+
+    el.querySelector('#btn-add').onclick = () => edit(null, refresh);
+
+    function renderTableData() {
+      el.querySelector('#summary').innerHTML =
+        `عدد المخازن: <b>${rows.length}</b> — داخل المصنع: <b>${rows.filter(r => r.location === 'داخل المصنع').length}</b>`;
+      renderTable(el.querySelector('#table-wrap'), [
+        { key: 'name', label: 'الاسم' },
+        { key: 'location', label: 'الموقع', render: r => `<span class="tag ${r.location === 'داخل المصنع' ? 'salem' : 'new'}">${esc(r.location || '—')}</span>` },
+        { key: 'notes', label: 'ملاحظات', render: r => r.notes || '—' },
+        {
+          key: 'actions', label: '',
+          render: (r) => `<button class="btn mini" data-edit="${r.id}">تعديل</button>
+            <button class="btn mini danger" data-del="${r.id}">حذف</button>`,
+        },
+      ], rows);
+
+      el.querySelectorAll('[data-edit]').forEach(b => {
+        b.onclick = () => edit(rows.find(r => r.id === Number(b.dataset.edit)), refresh);
+      });
+      el.querySelectorAll('[data-del]').forEach(b => {
+        b.onclick = async () => {
+          const r = rows.find(x => x.id === Number(b.dataset.del));
+          if (!r) return;
+          if (await confirmDialog(`حذف المخزن «${esc(r.name)}»؟`)) {
+            try {
+              await api.invoke('warehouses:delete', r.id, currentUser().id);
+              toast('تم الحذف', 'ok');
+              await refresh();
+            } catch (e) {
+              toast(String(e.message || e), 'err');
+            }
+          }
+        };
+      });
     }
-    function edit(row) {
-      openModal(row ? 'تعديل مخزن' : 'إضافة مخزن',
-        `<label class="field"><span>الاسم *</span><input id="f-name" value="${esc(row ? row.name : '')}"></label>
-         <label class="field"><span>الموقع</span><select id="f-loc">
-           <option value="داخل المصنع" ${row && row.location === 'داخل المصنع' ? 'selected' : ''}>داخل المصنع</option>
-           <option value="خارج المصنع" ${row && row.location === 'خارج المصنع' ? 'selected' : ''}>خارج المصنع</option>
-         </select></label>
-         <label class="field"><span>ملاحظات</span><textarea id="f-notes">${esc(row ? row.notes || '' : '')}</textarea></label>`,
-        [{ label: 'حفظ', class: 'primary', onClick: async (back) => {
-          try {
-            await api.invoke('warehouses:save',
-              { id: row ? row.id : null, name: back.querySelector('#f-name').value,
-                location: back.querySelector('#f-loc').value, notes: back.querySelector('#f-notes').value },
-              currentUser().id);
-            back.remove(); toast('تم الحفظ', 'ok'); load();
-          } catch (e) { toast(e.message, 'err'); }
-        } }, { label: 'إلغاء', onClick: (back) => back.remove() }]);
+
+    async function refresh() {
+      rows = await api.invoke('warehouses:list');
+      renderTableData();
     }
-    async function del(id) {
-      if (!(await confirmDialog('حذف هذا المخزن نهائياً؟'))) return;
-      try { await api.invoke('warehouses:delete', id, currentUser().id); toast('تم الحذف', 'ok'); load(); }
-      catch (e) { toast(e.message, 'err'); }
+
+    function edit(row, onSaved) {
+      const back = openModal(row ? 'تعديل مخزن' : 'إضافة مخزن',
+        `<div class="form-grid">
+          <div class="field"><label>الاسم *</label><input id="f-name" value="${esc(row?.name || '')}" autofocus></div>
+          <div class="field"><label>الموقع</label><select id="f-loc">
+            <option value="داخل المصنع" ${row?.location === 'داخل المصنع' ? 'selected' : ''}>داخل المصنع</option>
+            <option value="خارج المصنع" ${row?.location === 'خارج المصنع' ? 'selected' : ''}>خارج المصنع</option>
+          </select></div>
+          <div class="field full"><label>ملاحظات</label><textarea id="f-notes" rows="2">${esc(row?.notes || '')}</textarea></div>
+        </div>`,
+        [
+          {
+            label: 'حفظ', class: 'primary',
+            onClick: async (b) => {
+              try {
+                await api.invoke('warehouses:save', {
+                  id: row ? row.id : null,
+                  name: b.querySelector('#f-name').value,
+                  location: b.querySelector('#f-loc').value,
+                  notes: b.querySelector('#f-notes').value,
+                }, currentUser().id);
+                b.remove();
+                toast('تم الحفظ', 'ok');
+                await onSaved();
+              } catch (e) {
+                toast(String(e.message || e), 'err');
+              }
+            },
+          },
+          { label: 'إلغاء', onClick: (b) => b.remove() },
+        ]);
+      if (row) back.dataset.editId = String(row.id);
     }
-    el.querySelector('#add').onclick = () => edit(null);
-    await load();
+
+    await refresh();
   }
 });
