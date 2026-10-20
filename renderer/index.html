@@ -7,17 +7,47 @@
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body class="login-body">
-  <div class="login-card">
-    <div class="login-logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2h4l1 3v4l4.5 10.5A1.8 1.8 0 0 1 17.8 22H6.2a1.8 1.8 0 0 1-1.7-2.5L9 9V5l1-3z"/><path d="M10 2h4"/><path d="M9 13h6"/></svg></div>
-    <h1>سام بلاستيك</h1>
-    <p class="subtitle">نظام إدارة مصنع نفخ العبوات البلاستيكية</p>
-    <form id="login-form">
-      <label>اسم المستخدم <input id="username" autocomplete="username" required></label>
-      <label>كلمة المرور <input id="password" type="password" autocomplete="current-password" required></label>
-      <p id="login-error" class="error hidden">اسم المستخدم أو كلمة المرور غير صحيحة</p>
-      <button type="submit" class="btn primary">دخول</button>
-    </form>
+  <div class="login-bg" aria-hidden="true">
+    <span class="orb a"></span>
+    <span class="orb b"></span>
+    <span class="orb c"></span>
+    <div class="grid-layer"></div>
+    <div id="particles"></div>
   </div>
+
+  <main class="login-card">
+    <div class="login-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2h4l1 3v4l4.5 10.5A1.8 1.8 0 0 1 17.8 22H6.2a1.8 1.8 0 0 1-1.7-2.5L9 9V5l1-3z"/><path d="M10 2h4"/><path d="M9 13h6"/></svg>
+    </div>
+    <h1>سام بلاستيك</h1>
+    <p class="subtitle rise" style="animation-delay:.1s">نظام إدارة مصنع نفخ العبوات البلاستيكية</p>
+
+    <form id="login-form" novalidate>
+      <label class="rise" style="animation-delay:.16s" for="username">اسم المستخدم</label>
+      <div class="input-wrap rise" style="animation-delay:.2s">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20.5c1-3.6 4-5.5 7.5-5.5s6.5 1.9 7.5 5.5"/></svg>
+        <input id="username" autocomplete="username" placeholder="اسم المستخدم" required>
+      </div>
+      <label class="rise" style="animation-delay:.26s" for="password">كلمة المرور</label>
+      <div class="input-wrap rise" style="animation-delay:.3s">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+        <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" required>
+        <button type="button" class="toggle-pass" id="toggle-pass" title="إظهار / إخفاء كلمة المرور" aria-label="إظهار كلمة المرور">
+          <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="eye-closed hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 18 18"/><path d="M10.6 5.2A9.7 9.7 0 0 1 12 5c6.5 0 10 7 10 7a17.4 17.4 0 0 1-2.8 3.9"/><path d="M6.7 6.6A16.7 16.7 0 0 0 2 12s3.5 7 10 7a9.8 9.8 0 0 0 5.4-1.6"/></svg>
+        </button>
+      </div>
+      <p id="login-error" class="error hidden">اسم المستخدم أو كلمة المرور غير صحيحة</p>
+      <button type="submit" id="login-btn">دخول</button>
+    </form>
+
+    <div class="login-signature rise" style="animation-delay:.42s">
+      <span class="line"></span>
+      <span>SAM · الأنظمة المحاسبية</span>
+      <span class="line"></span>
+    </div>
+    <div class="login-version rise" style="animation-delay:.48s">الإصدار 0.2.0</div>
+  </main>
 <script type="module" src="js/login.js"></script>
 </body>
 </html>

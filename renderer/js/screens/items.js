@@ -208,7 +208,7 @@ register('items', {
           <div class="field"><label>المقاس</label><input id="f-size" value="${esc(row?.size_label || '')}"></div>
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(row?.notes || '')}"></div>
         </div>
-        <div id="conv" style="margin-top:10px;color:#0f766e;font-size:13px;line-height:1.8"></div>
+        <div id="conv" style="margin-top:10px;color:#2450c8;font-size:13px;line-height:1.8"></div>
       `, [
         {
           label: 'حفظ', class: 'primary',
@@ -239,7 +239,7 @@ register('items', {
         <small style="color:#64748b">كود ; اسم ; مجموعة ; وحدة ; وزن ; كرتون ; كيس ; سعر ; محرز ; علامة ; مقاس ; ملاحظات</small></p>
         <div class="field"><input type="file" id="imp-file" accept=".csv,.txt"></div>
         <div class="field"><label>أو الصق البيانات هنا</label><textarea id="imp-text" rows="6" style="font-family:monospace;font-size:12px"></textarea></div>
-        <div id="imp-result" style="margin-top:8px;color:#0f766e;font-weight:bold"></div>
+        <div id="imp-result" style="margin-top:8px;color:#2450c8;font-weight:bold"></div>
       `, [
         {
           label: 'استيراد', class: 'primary',
