@@ -1,10 +1,49 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
-const { piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance } = require('../stock');
+const { toPieces, piecesToWeightKg } = require('../units');
+const { writeMoves, voidDoc, getBalance, bucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 const DISP_LABEL = { to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد', sold_scrap: 'بيع خردة' };
+
+// حساب توزيع الخصم: يخصم من التالف أولاً والباقي من السليم.
+// يُخزَّن التوزيع مع السند لعكس الأثر بدقة عند التعديل والإلغاء.
+function computeDeltas(db, doc) {
+  const item = db.prepare('SELECT * FROM items WHERE id=?').get(doc.item_id);
+  if (!item) throw new Error('صنف غير موجود');
+  let total = Math.max(0, Math.round(Number(doc.pieces) || 0));
+  const weight = Math.max(0, Number(doc.weight_kg) || 0);
+  if (total <= 0 && weight > 0) total = toPieces(weight, 'كجم', item);
+  if (total <= 0) return { talef_take: 0, salem_take: 0 };
+  const talefTake = Math.min(total, Number(item.qty_talef) || 0);
+  return { talef_take: talefTake, salem_take: total - talefTake };
+}
+
+// تطبيق أثر السند المخزن على السلات (sign=1 تطبيق، sign=-1 عكس)
+function applyStored(db, row, sign) {
+  if (Number(row.is_customer) === 1) return;
+  const d = computeStoredDeltas(row);
+  bucketsDelta(db, row.item_id, {
+    salem: sign * d.salem,
+    talef: sign * d.talef,
+    muharraz: sign * d.muharraz,
+  });
+}
+
+function computeStoredDeltas(row) {
+  const talefTake = Number(row.talef_take) || 0;
+  const salemTake = Number(row.salem_take) || 0;
+  const total = talefTake + salemTake;
+  switch (row.disposition) {
+    case 'to_recycled':
+      return { salem: -salemTake, talef: -talefTake, muharraz: total };
+    case 'to_stock':
+      // عاد للتخزين كسليم: ما خرج من التالف يصبح سليماً
+      return { salem: talefTake, talef: -talefTake, muharraz: 0 };
+    default: // to_supplier / sold_scrap: خروج نهائي
+      return { salem: -salemTake, talef: -talefTake, muharraz: 0 };
+  }
+}
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('scrap:suggest', () => suggestNumber(getDb(), 'scrap_movements'));
@@ -21,7 +60,8 @@ module.exports = function register(ipcMain) {
 
   ipcMain.handle('scrap:get', (e, id) => {
     const db = getDb();
-    const doc = db.prepare(`SELECT s.*, i.code item_code, i.name item_name, i.item_group, i.weight_grams,
+    const doc = db.prepare(`SELECT s.*, i.code item_code, i.name item_name, i.weight_grams,
+        i.qty_salem, i.qty_talef, i.qty_muharraz,
         w.name warehouse_name, p.name party_name
       FROM scrap_movements s
       JOIN items i ON i.id=s.item_id
@@ -41,12 +81,11 @@ module.exports = function register(ipcMain) {
     if (!checkDocNumber(db, 'scrap_movements', number, doc.id)) throw new Error('رقم السند مكرر');
     const item = db.prepare('SELECT * FROM items WHERE id=?').get(doc.item_id);
     if (!item) throw new Error('صنف غير موجود');
-    if (item.item_group === 4) throw new Error('خدمات النفخ ليست تالفاً');
-    const pieces = Math.max(0, Number(doc.pieces) || 0);
+    const pieces = Math.max(0, Math.round(Number(doc.pieces) || 0));
     const weight = Math.max(0, Number(doc.weight_kg) || 0);
     if (pieces <= 0 && weight <= 0) throw new Error('أدخل كمية (حبات أو وزن)');
     const party = doc.party_id ? db.prepare('SELECT * FROM parties WHERE id=?').get(doc.party_id) : null;
-    const isCustomer = party && (party.type === 'customer' || party.type === 'both');
+    const isCustomer = party && (party.type === 'customer' || party.type === 'both') ? 1 : 0;
     if (!isCustomer && ['to_recycled', 'to_stock', 'sold_scrap'].includes(doc.disposition) && !doc.warehouse_id) {
       throw new Error('اختر المخزن');
     }
@@ -54,16 +93,22 @@ module.exports = function register(ipcMain) {
     const before = isNew ? null : db.prepare('SELECT * FROM scrap_movements WHERE id=?').get(doc.id);
     let id = doc.id;
     withTransaction(db, () => {
+      // عكس أثر السند القديم أولاً (بدقة حسب التوزيع المخزن)
+      if (before) applyStored(db, before, -1);
+      const d = isCustomer ? { talef_take: 0, salem_take: 0 } : computeDeltas(db, doc);
       if (id) {
-        db.prepare(`UPDATE scrap_movements SET doc_number=?, doc_date=?, item_id=?, disposition=?, warehouse_id=?, party_id=?, pieces=?, weight_kg=?, price=?, notes=? WHERE id=?`)
+        db.prepare(`UPDATE scrap_movements SET doc_number=?, doc_date=?, item_id=?, disposition=?, warehouse_id=?, party_id=?,
+          pieces=?, weight_kg=?, price=?, talef_take=?, salem_take=?, is_customer=?, notes=? WHERE id=?`)
           .run(number, doc.doc_date, doc.item_id, doc.disposition, doc.warehouse_id || null,
-            doc.party_id || null, pieces, weight, doc.price || null, doc.notes || null, id);
+            doc.party_id || null, pieces, weight, doc.price || null, d.talef_take, d.salem_take, isCustomer, doc.notes || null, id);
       } else {
         id = db.prepare(`INSERT INTO scrap_movements
-          (doc_number, doc_date, item_id, disposition, warehouse_id, party_id, pieces, weight_kg, price, notes, created_by)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+          (doc_number, doc_date, item_id, disposition, warehouse_id, party_id, pieces, weight_kg, price,
+           talef_take, salem_take, is_customer, notes, created_by)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
           .run(number, doc.doc_date, doc.item_id, doc.disposition, doc.warehouse_id || null,
-            doc.party_id || null, pieces, weight, doc.price || null, doc.notes || null, userId).lastInsertRowid;
+            doc.party_id || null, pieces, weight, doc.price || null,
+            d.talef_take, d.salem_take, isCustomer, doc.notes || null, userId).lastInsertRowid;
       }
       const moves = [];
       const kg = weight || piecesToWeightKg(pieces, item.weight_grams || 0);
@@ -77,6 +122,9 @@ module.exports = function register(ipcMain) {
         }
       }
       writeMoves(db, 'scrap', id, number, doc.doc_date, moves, userId);
+      // تطبيق الأثر الجديد على السلات
+      const savedRow = db.prepare('SELECT * FROM scrap_movements WHERE id=?').get(id);
+      applyStored(db, savedRow, 1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'scrap_movement', id, before, doc);
     return { id };
@@ -88,6 +136,7 @@ module.exports = function register(ipcMain) {
     if (!before) throw new Error('السند غير موجود');
     withTransaction(db, () => {
       voidDoc(db, 'scrap', id, userId);
+      applyStored(db, before, -1);
       db.prepare(`UPDATE scrap_movements SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'scrap_movement', id, before, null);

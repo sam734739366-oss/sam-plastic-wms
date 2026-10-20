@@ -1,21 +1,8 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
 import { toast, implicationsDialog, renderTable, openModal, esc } from '../ui.js';
-
-const UNIT_LABELS = { piece: 'حبة', carton: 'كرتون', bag: 'كيس', kg: 'كجم', ton: 'طن', bale: 'بالة' };
-
-function today() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function unitsFor(item) {
-  const u = ['piece'];
-  if (item.pieces_per_carton) u.push('carton');
-  if (item.pieces_per_bag) u.push('bag');
-  u.push('kg', 'ton', 'bale');
-  return u;
-}
+import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
+import { fmtNum, today } from '../fmt.js';
 
 register('transfers', {
   title: 'نقل بين المخازن',
@@ -24,16 +11,20 @@ register('transfers', {
       const rows = await api.invoke('transfers:list');
       el.innerHTML = `
         <div class="toolbar"><button class="btn primary" id="btn-add">+ سند نقل</button></div>
+        <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
       el.querySelector('#btn-add').onclick = () => form(null);
+      const active = rows.filter(r => r.status !== 'void');
+      el.querySelector('#summary').innerHTML =
+        `عدد السندات: <b>${rows.length}</b> — النشطة: <b>${active.length}</b> — إجمالي حبات النشطة: <b>${fmtNum(active.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
-        { key: 'doc_number', label: 'الرقم' },
+        { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
         { key: 'from_name', label: 'من مخزن' },
         { key: 'to_name', label: 'إلى مخزن' },
         { key: 'items_count', label: 'البنود' },
-        { key: 'total_pieces', label: 'الحبات', render: r => Number(r.total_pieces || 0).toLocaleString('en-US') },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : 'نشط' },
+        { key: 'total_pieces', label: 'الحبات', render: r => fmtNum(r.total_pieces, 0) },
+        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
         {
           key: 'actions', label: '',
           render: (r) => `<button class="btn mini" data-view="${r.id}">عرض</button>
@@ -54,8 +45,8 @@ register('transfers', {
             <b>من:</b> ${esc(doc.from_name)} &nbsp; <b>إلى:</b> ${esc(doc.to_name)}</p>
           <table class="data"><thead><tr><th>الصنف</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td>
-            <td>${esc(it.quantity)} ${esc(it.unit)}</td><td>${Number(it.pieces).toLocaleString('en-US')}</td>
-            <td>${Number(it.weight_kg || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td></tr>`).join('')}</tbody></table>
+            <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td>
+            <td>${fmtNum(it.weight_kg)}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
           [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'transfer', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
             { label: 'إغلاق', onClick: (b) => b.remove() }]);
@@ -86,15 +77,14 @@ register('transfers', {
 
     async function form(doc) {
       const [items, warehouses] = await Promise.all([
-        api.invoke('items:list', null),
+        api.invoke('items:list'),
         api.invoke('warehouses:list'),
       ]);
-      const goods = items.filter(i => i.item_group !== 4);
       const suggest = doc ? null : await api.invoke('transfers:suggest');
 
       const back = openModal(doc ? `تعديل سند نقل ${esc(doc.doc_number)}` : 'سند نقل جديد', `
         <div class="form-grid">
-          <div class="field"><label>رقم السند *</label><input id="f-num" value="${esc(doc ? doc.doc_number : suggest)}"></div>
+          <div class="field"><label>رقم السند *</label><input id="f-num" value="${esc(doc ? doc.doc_number : suggest)}" dir="ltr"></div>
           <div class="field"><label>التاريخ *</label><input id="f-date" type="date" value="${esc(doc ? doc.doc_date : today())}"></div>
           <div class="field"><label>من مخزن *</label>
             <select id="f-from">${warehouses.map(w => `<option value="${w.id}" ${doc && doc.from_warehouse_id === w.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div>
@@ -103,7 +93,7 @@ register('transfers', {
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(doc ? doc.notes || '' : '')}"></div>
         </div>
         <div class="prows-head">
-          <span>الصنف</span><span>الكمية</span><span>الوحدة</span><span>رصيد المصدر</span><span>ملاحظات</span><span></span>
+          <span>الصنف</span><span>الكمية</span><span>الوحدة</span><span>رصيد المصدر</span><span>الحبات/الوزن</span><span>ملاحظات</span><span></span>
         </div>
         <div id="irows"></div>
         <button class="btn small" id="add-row" type="button">+ إضافة بند</button>`,
@@ -127,20 +117,21 @@ register('transfers', {
             b.remove(); toast('تم الحفظ', 'ok'); await load();
           } catch (e) { toast(String(e.message || e), 'err'); }
         } }, { label: 'إلغاء', onClick: (b) => b.remove() }]);
-      back.querySelector('.modal').style.minWidth = '880px';
+      back.querySelector('.modal').style.minWidth = '900px';
 
       const rowsWrap = back.querySelector('#irows');
-      const itemById = (id) => goods.find(i => i.id === id);
+      const itemById = (id) => items.find(i => i.id === id);
       const fromWh = () => Number(back.querySelector('#f-from').value);
 
       function addRow(data = {}) {
         const row = document.createElement('div');
         row.className = 'irow';
         row.innerHTML = `
-          <select class="p-item">${goods.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
+          <select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
           <input class="p-qty" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}">
           <select class="p-unit"></select>
           <div class="p-bal"><span class="bal-text muted"></span></div>
+          <span class="p-calc muted"></span>
           <input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}">
           <button class="btn mini danger p-del" type="button">×</button>`;
         rowsWrap.appendChild(row);
@@ -148,24 +139,38 @@ register('transfers', {
 
         const itemSel = row.querySelector('.p-item');
         const unitSel = row.querySelector('.p-unit');
+        const qty = row.querySelector('.p-qty');
         const balText = row.querySelector('.bal-text');
+        const calc = row.querySelector('.p-calc');
 
-        async function refresh() {
+        function refresh() {
           const item = itemById(Number(itemSel.value));
+          if (!item) return;
           const cur = unitSel.value;
-          const opts = unitsFor(item);
-          unitSel.innerHTML = opts.map(u => `<option value="${u}">${UNIT_LABELS[u]}</option>`).join('');
-          if (opts.includes(cur)) unitSel.value = cur;
-          else if (data.unit && opts.includes(data.unit)) unitSel.value = data.unit;
+          const opts = unitOptionsFor(item);
+          unitSel.innerHTML = opts.map(o => `<option value="${o.value}">${esc(o.label)}</option>`).join('');
+          if (opts.some(o => o.value === cur)) unitSel.value = cur;
+          else if (data.unit && opts.some(o => o.value === data.unit)) unitSel.value = data.unit;
+          update();
+        }
+        async function update() {
+          const item = itemById(Number(itemSel.value));
+          if (!item) return;
           balText.textContent = '…';
           try {
             const bal = await api.invoke('stock:balance', item.id, fromWh());
-            balText.textContent = `الرصيد: ${Number(bal.balance_pieces).toLocaleString('en-US')} حبة`;
+            balText.textContent = `الرصيد: ${fmtNum(bal.balance_pieces, 0)} حبة`;
           } catch { balText.textContent = ''; }
+          const pieces = toPieces(qty.value, unitSel.value, item);
+          const kg = piecesToWeightKg(pieces || 0, item?.weight_grams || 0);
+          calc.textContent = pieces != null
+            ? `${fmtNum(pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`
+            : '—';
         }
         itemSel.onchange = refresh;
-        unitSel.onchange = refresh;
-        row._refresh = refresh;
+        unitSel.onchange = update;
+        qty.oninput = update;
+        row._refresh = update;
         if (data.item_id) itemSel.value = String(data.item_id);
         refresh();
       }

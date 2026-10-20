@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance } = require('../stock');
+const { writeMoves, voidDoc, getBalance, applySalemDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 module.exports = function register(ipcMain) {
@@ -40,7 +40,9 @@ module.exports = function register(ipcMain) {
     const before = isNew ? null : db.prepare('SELECT * FROM exit_permits WHERE id=?').get(doc.id);
     let id = doc.id;
     withTransaction(db, () => {
+      let oldItems = [];
       if (id) {
+        oldItems = db.prepare('SELECT * FROM exit_items WHERE exit_permit_id=?').all(id);
         db.prepare('DELETE FROM exit_items WHERE exit_permit_id=?').run(id);
         db.prepare(`UPDATE exit_permits SET doc_number=?, doc_date=?, warehouse_id=?, driver_name=?, car_number=?, destination=?, notes=? WHERE id=?`)
           .run(number, doc.doc_date, doc.warehouse_id, doc.driver_name, doc.car_number || null,
@@ -58,7 +60,6 @@ module.exports = function register(ipcMain) {
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
-        if (item.item_group === 4) throw new Error(`الصنف ${item.code} خدمة — لا يُخرج من المخزن`);
         const pieces = toPieces(it.quantity, it.unit, item);
         if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
@@ -68,6 +69,9 @@ module.exports = function register(ipcMain) {
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, it.notes || null);
       }
       writeMoves(db, 'exit', id, number, doc.doc_date, moves, userId);
+      // الخروج يخصم السليم: عكس أثر البنود القديمة ثم تطبيق الجديدة
+      if (oldItems.length) applySalemDelta(db, oldItems, 1);
+      applySalemDelta(db, moves, -1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'exit_permit', id, before, doc);
     return { id };
@@ -77,8 +81,10 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     const before = db.prepare('SELECT * FROM exit_permits WHERE id=?').get(id);
     if (!before) throw new Error('التصريح غير موجود');
+    const oldItems = db.prepare('SELECT * FROM exit_items WHERE exit_permit_id=?').all(id);
     withTransaction(db, () => {
       voidDoc(db, 'exit', id, userId);
+      applySalemDelta(db, oldItems, 1);
       db.prepare(`UPDATE exit_permits SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'exit_permit', id, before, null);

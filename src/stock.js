@@ -27,9 +27,9 @@ function bucketsDelta(db, itemId, deltas = {}) {
   return next;
 }
 
-// تجميع دلتا سليم لأصناف مكررة في بنود مستند: +داخل أو -خارج
+// تجميع دلتا سلة (سليم/تالف/محرز) لأصناف مكررة في بنود مستند: +داخل أو -خارج
 // يقبل بنود المشتريات/الصرف (pieces) وحركات المخزون (qty_in_pieces / qty_out_pieces)
-function applySalemDelta(db, items, sign) {
+function applyBucketDelta(db, items, sign, key) {
   const byItem = new Map();
   for (const it of items) {
     const itemId = it.item_id;
@@ -38,9 +38,12 @@ function applySalemDelta(db, items, sign) {
     byItem.set(itemId, (byItem.get(itemId) || 0) + pieces);
   }
   for (const [itemId, pieces] of byItem) {
-    bucketsDelta(db, itemId, { salem: sign * pieces });
+    bucketsDelta(db, itemId, { [key]: sign * pieces });
   }
 }
+
+function applySalemDelta(db, items, sign) { return applyBucketDelta(db, items, sign, 'salem'); }
+function applyTalefDelta(db, items, sign) { return applyBucketDelta(db, items, sign, 'talef'); }
 
 function writeMoves(db, docType, docId, docNumber, docDate, rows, userId) {
   withTransaction(db, () => {
@@ -93,4 +96,4 @@ function getBalance(db, itemId, warehouseId) {
     FROM stock_moves WHERE item_id=? AND warehouse_id=?`).get(itemId, warehouseId);
 }
 
-module.exports = { writeMoves, voidDoc, getBalance, bucketsDelta, applySalemDelta };
+module.exports = { writeMoves, voidDoc, getBalance, bucketsDelta, applyBucketDelta, applySalemDelta, applyTalefDelta };

@@ -1,35 +1,10 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
 import { toast, implicationsDialog, renderTable, openModal, esc } from '../ui.js';
+import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
+import { fmtMoney, fmtNum, today } from '../fmt.js';
 
-const UNIT_LABELS = { piece: 'حبة', carton: 'كرتون', bag: 'كيس', kg: 'كجم', ton: 'طن', bale: 'بالة' };
 const TYPE_LABEL = { sale: 'بيع', scrap: 'خردة', blowing_fee: 'أجرة نفخ' };
-
-function today() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function unitsFor(item) {
-  const u = ['piece'];
-  if (item.pieces_per_carton) u.push('carton');
-  if (item.pieces_per_bag) u.push('bag');
-  u.push('kg', 'ton', 'bale');
-  return u;
-}
-
-function calcPieces(qty, unit, item) {
-  const q = parseFloat(qty) || 0;
-  switch (unit) {
-    case 'piece': return Math.round(q);
-    case 'carton': return Math.round(q * (item.pieces_per_carton || 0));
-    case 'bag': return Math.round(q * (item.pieces_per_bag || 0));
-    case 'kg': return item.weight_grams ? Math.round(q * 1000 / item.weight_grams) : 0;
-    case 'ton': return item.weight_grams ? Math.round(q * 1000000 / item.weight_grams) : 0;
-    case 'bale': return Math.round(q);
-  }
-  return 0;
-}
 
 register('sales', {
   title: 'فواتير البيع',
@@ -38,17 +13,21 @@ register('sales', {
       const rows = await api.invoke('sales:list');
       el.innerHTML = `
         <div class="toolbar"><button class="btn primary" id="btn-add">+ فاتورة بيع</button></div>
+        <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
       el.querySelector('#btn-add').onclick = () => form(null);
+      const active = rows.filter(r => r.status !== 'void');
+      el.querySelector('#summary').innerHTML =
+        `عدد الفواتير: <b>${rows.length}</b> — النشطة: <b>${active.length}</b> — إجمالي النشطة: <b>${fmtMoney(active.reduce((a, r) => a + (Number(r.total) || 0), 0))}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
-        { key: 'doc_number', label: 'الرقم' },
+        { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
-        { key: 'invoice_type', label: 'النوع', render: r => TYPE_LABEL[r.invoice_type] || r.invoice_type },
+        { key: 'invoice_type', label: 'النوع', render: r => `<span class="tag ${r.invoice_type === 'blowing_fee' ? 'muharraz' : r.invoice_type === 'scrap' ? 'talef' : 'salem'}">${esc(TYPE_LABEL[r.invoice_type] || r.invoice_type)}</span>` },
         { key: 'party_name', label: 'العميل', render: r => r.party_name || '—' },
         { key: 'driver_name', label: 'السائق', render: r => r.driver_name || '—' },
         { key: 'items_count', label: 'البنود' },
-        { key: 'total', label: 'الإجمالي (ريال)', render: r => Number(r.total || 0).toLocaleString('en-US') },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : 'نشط' },
+        { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
+        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغاة</span>' : '<span class="tag salem">نشطة</span>' },
         {
           key: 'actions', label: '',
           render: (r) => `<button class="btn mini" data-view="${r.id}">عرض</button>
@@ -69,9 +48,10 @@ register('sales', {
             &nbsp; <b>السائق:</b> ${esc(doc.driver_name || '—')} &nbsp; <b>السيارة:</b> ${esc(doc.car_number || '—')}</p>
           <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>السعر</th><th>الإجمالي</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
-            <td>${esc(it.quantity)} ${esc(it.unit)}</td><td>${Number(it.pieces).toLocaleString('en-US')}</td>
-            <td>${Number(it.unit_price || 0).toLocaleString('en-US')}</td>
-            <td>${Number(it.total_price || 0).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table>
+            <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td>
+            <td>${fmtMoney(it.unit_price)}</td>
+            <td>${fmtMoney(it.total_price)}</td></tr>`).join('')}</tbody></table>
+          <p style="margin-top:8px"><b>الإجمالي العام:</b> ${fmtMoney(doc.items.reduce((a, it) => a + (Number(it.total_price) || 0), 0))}</p>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
           [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'invoice', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
             { label: 'إغلاق', onClick: (b) => b.remove() }]);
@@ -82,7 +62,7 @@ register('sales', {
       try {
         const doc = await api.invoke('sales:get', id);
         const ok = await implicationsDialog('تعديل فاتورة بيع', [
-          'ستُعكس حركة المخزون الحالية ويُعاد تطبيق الفاتورة بالكميات الجديدة.',
+          'ستُعكس حركة المخزون وأثر السلات الحالي ويُعاد تطبيق الفاتورة بالقيم الجديدة.',
         ]);
         if (!ok) return;
         form(doc);
@@ -93,7 +73,7 @@ register('sales', {
       try {
         const doc = await api.invoke('sales:get', id);
         if (!(await implicationsDialog('إلغاء فاتورة', [
-          `سيُلغى أثر الفاتورة ${esc(doc.doc_number)} على المخزون وتُعاد الكميات للمخزن.`,
+          `سيُلغى أثر الفاتورة ${esc(doc.doc_number)} على المخزون والسلات وتُعاد الكميات.`,
         ]))) return;
         await api.invoke('sales:void', id, currentUser().id);
         toast('تم إلغاء الفاتورة', 'ok');
@@ -102,7 +82,8 @@ register('sales', {
     }
 
     async function form(doc) {
-      const [parties, warehouses] = await Promise.all([
+      const [items, parties, warehouses] = await Promise.all([
+        api.invoke('items:list'),
         api.invoke('parties:list', null),
         api.invoke('warehouses:list'),
       ]);
@@ -111,7 +92,7 @@ register('sales', {
 
       const back = openModal(doc ? `تعديل فاتورة ${esc(doc.doc_number)}` : 'فاتورة بيع جديدة', `
         <div class="form-grid">
-          <div class="field"><label>رقم الفاتورة *</label><input id="f-num" value="${esc(doc ? doc.doc_number : suggest)}"></div>
+          <div class="field"><label>رقم الفاتورة *</label><input id="f-num" value="${esc(doc ? doc.doc_number : suggest)}" dir="ltr"></div>
           <div class="field"><label>التاريخ *</label><input id="f-date" type="date" value="${esc(doc ? doc.doc_date : today())}"></div>
           <div class="field"><label>النوع *</label>
             <select id="f-type">
@@ -159,23 +140,8 @@ register('sales', {
       back.querySelector('.modal').style.minWidth = '980px';
 
       const rowsWrap = back.querySelector('#irows');
-      const GROUP_FOR = { sale: 2, scrap: 5, blowing_fee: 4 };
-      let items = [];
       const itemById = (id) => items.find(i => i.id === id);
       const isService = () => back.querySelector('#f-type').value === 'blowing_fee';
-      const initialRows = (doc && doc.items.length)
-        ? doc.items.map(it => ({ item_id: it.item_id, warehouse_id: it.warehouse_id, quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, notes: it.notes }))
-        : [{}];
-
-      async function refreshAll() {
-        items = await api.invoke('items:list', GROUP_FOR[back.querySelector('#f-type').value]);
-        rowsWrap.innerHTML = '';
-        for (const r of initialRows) addRow(r);
-      }
-      back.querySelector('#f-type').onchange = () => {
-        initialRows.length = 0; initialRows.push({});
-        refreshAll();
-      };
 
       function addRow(data = {}) {
         const row = document.createElement('div');
@@ -201,38 +167,55 @@ register('sales', {
         const balText = row.querySelector('.bal-text');
         const calc = row.querySelector('.p-calc');
 
-        async function refresh() {
+        function refresh() {
           const item = itemById(Number(itemSel.value));
           if (!item) return;
           const cur = unitSel.value;
-          const opts = unitsFor(item);
-          unitSel.innerHTML = opts.map(u => `<option value="${u}">${UNIT_LABELS[u]}</option>`).join('');
-          if (opts.includes(cur)) unitSel.value = cur;
-          else if (data.unit && opts.includes(data.unit)) unitSel.value = data.unit;
+          const opts = unitOptionsFor(item);
+          unitSel.innerHTML = opts.map(o => `<option value="${o.value}">${esc(o.label)}</option>`).join('');
+          if (opts.some(o => o.value === cur)) unitSel.value = cur;
+          else if (data.unit && opts.some(o => o.value === data.unit)) unitSel.value = data.unit;
+          update();
+        }
+        async function update() {
+          const item = itemById(Number(itemSel.value));
+          if (!item) return;
           if (!isService()) {
             balText.textContent = '…';
             try {
               const bal = await api.invoke('stock:balance', item.id, Number(whSel.value));
-              balText.textContent = `الرصيد: ${Number(bal.balance_pieces).toLocaleString('en-US')} حبة`;
+              balText.textContent = `الرصيد: ${fmtNum(bal.balance_pieces, 0)} حبة`;
             } catch { balText.textContent = ''; }
           } else {
             balText.textContent = '';
             if (item.service_price && !price.value) price.value = item.service_price;
           }
-          const pieces = calcPieces(qty.value, unitSel.value, item);
-          calc.textContent = pieces ? `${pieces.toLocaleString('en-US')} حبة` : '';
+          const pieces = toPieces(qty.value, unitSel.value, item);
+          const kg = piecesToWeightKg(pieces || 0, item?.weight_grams || 0);
+          const p = parseFloat(price.value) || 0;
+          const q = parseFloat(qty.value) || 0;
+          calc.textContent = (pieces != null
+            ? `${fmtNum(pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`
+            : '—') + (p && q ? ` — الإجمالي: ${fmtNum(p * q)}` : '');
         }
         itemSel.onchange = refresh;
-        whSel.onchange = refresh;
-        unitSel.onchange = refresh;
-        qty.oninput = refresh;
+        whSel.onchange = update;
+        unitSel.onchange = update;
+        qty.oninput = update;
+        price.oninput = update;
         if (data.item_id) itemSel.value = String(data.item_id);
         if (data.warehouse_id) whSel.value = String(data.warehouse_id);
         refresh();
       }
 
-      await refreshAll();
-      back.querySelector('#add-row').onclick = () => addRow({});
+      if (doc && doc.items.length) {
+        for (const it of doc.items) {
+          addRow({ item_id: it.item_id, warehouse_id: it.warehouse_id, quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, notes: it.notes });
+        }
+      } else {
+        addRow();
+      }
+      back.querySelector('#add-row').onclick = () => addRow();
     }
 
     await load();

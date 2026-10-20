@@ -1,11 +1,18 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance } = require('../stock');
+const { writeMoves, voidDoc, getBalance, applyBucketDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 const TYPE_LABEL = { sale: 'بيع', scrap: 'خردة', blowing_fee: 'أجرة نفخ' };
-const TYPE_GROUP = { sale: 2, scrap: 5, blowing_fee: 4 };
+// أثر الفاتورة على السلات: بيع يخصم السليم، خردة تخصم التالف، أجرة نفخ بلا أثر
+const TYPE_BUCKET = { sale: 'salem', scrap: 'talef' };
+
+function applyTypeDelta(db, items, sign, invoiceType) {
+  const key = TYPE_BUCKET[invoiceType];
+  if (!key) return;
+  applyBucketDelta(db, items, sign, key);
+}
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('sales:suggest', () => suggestNumber(getDb(), 'invoices'));
@@ -37,13 +44,15 @@ module.exports = function register(ipcMain) {
     if (!number) throw new Error('رقم الفاتورة مطلوب (ترقيم يدوي)');
     if (!doc.doc_date) throw new Error('التاريخ مطلوب');
     if (!doc.items || doc.items.length === 0) throw new Error('أضف بنداً واحداً على الأقل');
-    if (!TYPE_GROUP[doc.invoice_type]) throw new Error('نوع الفاتورة غير صالح');
+    if (!TYPE_LABEL[doc.invoice_type]) throw new Error('نوع الفاتورة غير صالح');
     if (!checkDocNumber(db, 'invoices', number, doc.id)) throw new Error('رقم الفاتورة مكرر');
     const isNew = !doc.id;
     const before = isNew ? null : db.prepare('SELECT * FROM invoices WHERE id=?').get(doc.id);
     let id = doc.id;
     withTransaction(db, () => {
+      let oldItems = [];
       if (id) {
+        oldItems = db.prepare('SELECT * FROM invoice_items WHERE invoice_id=?').all(id);
         db.prepare('DELETE FROM invoice_items WHERE invoice_id=?').run(id);
         db.prepare(`UPDATE invoices SET doc_number=?, doc_date=?, party_id=?, invoice_type=?, driver_name=?, car_number=?, notes=? WHERE id=?`)
           .run(number, doc.doc_date, doc.party_id || null, doc.invoice_type,
@@ -61,10 +70,6 @@ module.exports = function register(ipcMain) {
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
-        const expectedGroup = TYPE_GROUP[doc.invoice_type];
-        if (item.item_group !== expectedGroup) {
-          throw new Error(`الصنف ${item.code} لا يناسب ${TYPE_LABEL[doc.invoice_type]} — اختر صنفاً من المجموعة ${String(expectedGroup).padStart(3, '0')}`);
-        }
         const pieces = toPieces(it.quantity, it.unit, item);
         if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
@@ -77,6 +82,9 @@ module.exports = function register(ipcMain) {
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, price, price * it.quantity, it.notes || null);
       }
       writeMoves(db, 'invoice', id, number, doc.doc_date, moves, userId);
+      // أرصدة سليم/تالف: عكس أثر النوع القديم ثم تطبيق الجديد (الفاتورة تخصم)
+      if (oldItems.length) applyTypeDelta(db, oldItems, 1, before.invoice_type);
+      applyTypeDelta(db, moves, -1, doc.invoice_type);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'invoice', id, before, doc);
     return { id };
@@ -88,8 +96,10 @@ module.exports = function register(ipcMain) {
     if (!before) throw new Error('الفاتورة غير موجودة');
     const linked = db.prepare(`SELECT COUNT(*) c FROM customer_deliveries WHERE invoice_id=? AND status='active'`).get(id).c;
     if (linked > 0) throw new Error('لا يمكن إلغاء الفاتورة — مرتبطة بسند تسليم نشط، ألغِ التسليم أولاً');
+    const oldItems = db.prepare('SELECT * FROM invoice_items WHERE invoice_id=?').all(id);
     withTransaction(db, () => {
       voidDoc(db, 'invoice', id, userId);
+      applyTypeDelta(db, oldItems, 1, before.invoice_type);
       db.prepare(`UPDATE invoices SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'invoice', id, before, null);

@@ -23,6 +23,12 @@ function migrate(d) {
   add('qty_salem', 'qty_salem INTEGER NOT NULL DEFAULT 0');
   add('qty_talef', 'qty_talef INTEGER NOT NULL DEFAULT 0');
   add('qty_muharraz', 'qty_muharraz INTEGER NOT NULL DEFAULT 0');
+  // سندات التالف: تخزين توزيع الخصم (تالف/سليم) لعكس الأثر بدقة عند التعديل والإلغاء
+  const scrapCols = d.prepare('PRAGMA table_info(scrap_movements)').all().map(c => c.name);
+  const scrapAdd = (name, sql) => { if (!scrapCols.includes(name)) d.exec(`ALTER TABLE scrap_movements ADD COLUMN ${sql}`); };
+  scrapAdd('talef_take', 'talef_take INTEGER NOT NULL DEFAULT 0');
+  scrapAdd('salem_take', 'salem_take INTEGER NOT NULL DEFAULT 0');
+  scrapAdd('is_customer', 'is_customer INTEGER NOT NULL DEFAULT 0');
   // ترحيل قيمة العملة القديمة (اسم) إلى الرمز الجديد
   const cur = d.prepare("SELECT value FROM settings WHERE key='currency'").get();
   if (cur && !['YER', 'SAR', 'USD'].includes(cur.value)) {
