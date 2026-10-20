@@ -56,10 +56,10 @@ test('items:save rejects non-numeric code', () => {
   assert.throws(() => h['items:save'](null, { code: '', name: 'خطأ' }, 1), /كود الصنف مطلوب/);
 });
 
-test('items:save rejects unit outside the five allowed units', () => {
+test('items:save rejects unit outside the six allowed units', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
-  assert.throws(() => h['items:save'](null, { code: '103', name: 'خطأ', unit_name: 'امبولة' }, 1), /الوحدة يجب أن تكون/);
+  assert.throws(() => h['items:save'](null, { code: '103', name: 'خطأ', unit_name: 'بالة' }, 1), /الوحدة يجب أن تكون/);
 });
 
 test('items:save accepts carton as a unit', () => {
@@ -68,6 +68,14 @@ test('items:save accepts carton as a unit', () => {
   const { id } = h['items:save'](null, { code: '108', name: 'علب مشروب', unit_name: 'كرتون' }, 1);
   const row = db.prepare('SELECT * FROM items WHERE id=?').get(id);
   assert.equal(row.unit_name, 'كرتون');
+});
+
+test('items:save accepts ampoule as a unit', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  const { id } = h['items:save'](null, { code: '109', name: 'امبول ماء مقطر', unit_name: 'امبول', weight_grams: 5.02 }, 1);
+  const row = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(row.unit_name, 'امبول');
 });
 
 test('items:save rejects duplicate code', () => {

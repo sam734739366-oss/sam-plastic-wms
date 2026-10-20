@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 
-const UNITS = ['علبة', 'حبة', 'غطاء', 'كيس', 'كرتون'];
+const UNITS = ['علبة', 'حبة', 'غطاء', 'كيس', 'كرتون', 'امبول'];
 const AR_DIGITS = {
   '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
   '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
@@ -24,7 +24,7 @@ module.exports = function register(ipcMain) {
     const name = String(row.name || '').trim();
     if (!name) throw new Error('اسم الصنف مطلوب');
     const unit = String(row.unit_name || '').trim() || 'حبة';
-    if (!UNITS.includes(unit)) throw new Error('الوحدة يجب أن تكون: علبة، حبة، غطاء، كيس، أو كرتون');
+    if (!UNITS.includes(unit)) throw new Error('الوحدة يجب أن تكون: علبة، حبة، غطاء، كيس، كرتون، أو امبول');
     const dup = db.prepare('SELECT id FROM items WHERE code=? AND id IS NOT ?').get(code, row.id || -1);
     if (dup) throw new Error('كود الصنف مكرر — اختر كوداً آخر');
 

@@ -2,7 +2,7 @@ import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
 import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
 
-const UNITS = ['علبة', 'حبة', 'غطاء', 'كيس', 'كرتون'];
+const UNITS = ['علبة', 'حبة', 'غطاء', 'كيس', 'كرتون', 'امبول'];
 
 function num(v) {
   if (v === '' || v === null || v === undefined) return '';
