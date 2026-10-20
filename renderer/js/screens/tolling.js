@@ -1,32 +1,15 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
 import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
-
-function today() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function calcPieces(qty, unit, item) {
-  const q = parseFloat(qty) || 0;
-  switch (unit) {
-    case 'piece': return Math.round(q);
-    case 'carton': return Math.round(q * (item.pieces_per_carton || 0));
-    case 'bag': return Math.round(q * (item.pieces_per_bag || 0));
-    case 'kg': return item.weight_grams ? Math.round(q * 1000 / item.weight_grams) : 0;
-    case 'ton': return item.weight_grams ? Math.round(q * 1000000 / item.weight_grams) : 0;
-  }
-  return 0;
-}
+import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
+import { fmtNum, today } from '../fmt.js';
 
 register('tolling', {
   title: 'النفخ للغير',
   async mount(el) {
     async function load(tab = 'receipts') {
-      const [rawItems, goodsItems, feeItems, parties, receipts, deliveries, balance] = await Promise.all([
-        api.invoke('items:list', 3),
-        api.invoke('items:list', 2),
-        api.invoke('items:list', 4),
+      const [items, parties, receipts, deliveries, balance] = await Promise.all([
+        api.invoke('items:list'),
         api.invoke('parties:list', null),
         api.invoke('tolling:receiptsList'),
         api.invoke('tolling:deliveriesList'),
@@ -46,15 +29,19 @@ register('tolling', {
       el.querySelector('#tab-balance').onclick = () => load('balance');
 
       if (tab === 'receipts') {
-        body.innerHTML = `<div class="toolbar"><button class="btn primary" id="btn-add">+ سند استلام خام</button></div><div id="table-wrap"></div>`;
-        body.querySelector('#btn-add').onclick = () => receiptForm(null, customers, rawItems);
+        body.innerHTML = `<div class="toolbar"><button class="btn primary" id="btn-add">+ سند استلام خام</button></div>
+          <div id="summary" class="summary-line"></div><div id="table-wrap"></div>`;
+        body.querySelector('#btn-add').onclick = () => receiptForm(null, customers, items);
+        const active = receipts.filter(r => r.status !== 'void');
+        body.querySelector('#summary').innerHTML =
+          `عدد السندات: <b>${receipts.length}</b> — النشطة: <b>${active.length}</b> — إجمالي حبات النشطة: <b>${fmtNum(active.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
         renderTable(body.querySelector('#table-wrap'), [
-          { key: 'doc_number', label: 'الرقم' },
+          { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
           { key: 'doc_date', label: 'التاريخ' },
           { key: 'party_name', label: 'العميل' },
           { key: 'items_count', label: 'البنود' },
-          { key: 'total_pieces', label: 'الحبات', render: r => Number(r.total_pieces).toLocaleString('en-US') },
-          { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : 'نشط' },
+          { key: 'total_pieces', label: 'الحبات', render: r => fmtNum(r.total_pieces, 0) },
+          { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
           { key: 'actions', label: '', render: r => `<button class="btn mini" data-view="${r.id}">عرض</button>
             <button class="btn mini" data-edit="${r.id}">تعديل</button>
             <button class="btn mini danger" data-void="${r.id}">إلغاء</button>` },
@@ -62,7 +49,7 @@ register('tolling', {
         body.querySelectorAll('[data-view]').forEach(b => b.onclick = () => receiptView(Number(b.dataset.view)));
         body.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
           const doc = await api.invoke('tolling:receiptGet', Number(b.dataset.edit));
-          receiptForm(doc, customers, rawItems);
+          receiptForm(doc, customers, items);
         });
         body.querySelectorAll('[data-void]').forEach(b => b.onclick = async () => {
           if (!(await confirmDialog('سيُلغى السند ويُخصم من رصيد العميل. متابعة؟'))) return;
@@ -72,15 +59,19 @@ register('tolling', {
           } catch (e) { toast(String(e.message || e), 'err'); }
         });
       } else if (tab === 'deliveries') {
-        body.innerHTML = `<div class="toolbar"><button class="btn primary" id="btn-add">+ سند تسليم</button></div><div id="table-wrap"></div>`;
-        body.querySelector('#btn-add').onclick = () => deliveryForm(null, customers, goodsItems, feeItems);
+        body.innerHTML = `<div class="toolbar"><button class="btn primary" id="btn-add">+ سند تسليم</button></div>
+          <div id="summary" class="summary-line"></div><div id="table-wrap"></div>`;
+        body.querySelector('#btn-add').onclick = () => deliveryForm(null, customers, items);
+        const active = deliveries.filter(r => r.status !== 'void');
+        body.querySelector('#summary').innerHTML =
+          `عدد السندات: <b>${deliveries.length}</b> — النشطة: <b>${active.length}</b> — إجمالي قطع النشطة: <b>${fmtNum(active.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
         renderTable(body.querySelector('#table-wrap'), [
-          { key: 'doc_number', label: 'الرقم' },
+          { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
           { key: 'doc_date', label: 'التاريخ' },
           { key: 'party_name', label: 'العميل' },
-          { key: 'total_pieces', label: 'القطع المسلمة', render: r => Number(r.total_pieces).toLocaleString('en-US') },
+          { key: 'total_pieces', label: 'القطع المسلمة', render: r => fmtNum(r.total_pieces, 0) },
           { key: 'invoice_number', label: 'فاتورة الأجرة', render: r => r.invoice_number || '—' },
-          { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : 'نشط' },
+          { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
           { key: 'actions', label: '', render: r => `<button class="btn mini" data-view="${r.id}">عرض</button>
             <button class="btn mini danger" data-void="${r.id}">إلغاء</button>` },
         ], deliveries);
@@ -95,12 +86,13 @@ register('tolling', {
       } else {
         renderTable(body, [
           { key: 'name', label: 'العميل' },
-          { key: 'raw_in', label: 'استلم خام (حبة)', render: r => Number(r.raw_in).toLocaleString('en-US') },
-          { key: 'raw_kg', label: 'الوزن (كجم)', render: r => Number(r.raw_kg || 0).toLocaleString('en-US', { maximumFractionDigits: 2 }) },
-          { key: 'delivered_out', label: 'سلّمنا تام (حبة)', render: r => Number(r.delivered_out).toLocaleString('en-US') },
-          { key: 'scrap_out', label: 'تالف (حبة)', render: r => Number(r.scrap_out).toLocaleString('en-US') },
-          { key: 'remaining', label: 'الباقي لدينا', render: r => `<b>${Number(r.remaining).toLocaleString('en-US')}</b>` },
+          { key: 'raw_in', label: 'استلم خام (حبة)', render: r => fmtNum(r.raw_in, 0) },
+          { key: 'raw_kg', label: 'الوزن (كجم)', render: r => fmtNum(r.raw_kg) },
+          { key: 'delivered_out', label: 'سلّمنا تام (حبة)', render: r => fmtNum(r.delivered_out, 0) },
+          { key: 'scrap_out', label: 'تالف (حبة)', render: r => fmtNum(r.scrap_out, 0) },
+          { key: 'remaining', label: 'الباقي لدينا', render: r => `<span class="tag ${Number(r.remaining) < 0 ? 'talef' : 'salem'}">${fmtNum(r.remaining, 0)}</span>` },
         ], balance);
+        if (!balance.length) body.innerHTML = '<p class="muted">لا يوجد عملاء بعد</p>';
       }
     }
 
@@ -110,19 +102,20 @@ register('tolling', {
         openModal(`سند استلام خام ${esc(doc.doc_number)}`, `
           <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>العميل:</b> ${esc(doc.party_name)}</p>
           <table class="data"><thead><tr><th>الصنف</th><th>العلب</th><th>حبات/علبة</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
-          <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.boxes)}</td>
-            <td>${esc(it.pieces_per_box || '—')}</td><td>${Number(it.pieces).toLocaleString('en-US')}</td>
-            <td>${Number(it.weight_kg || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td></tr>`).join('')}</tbody></table>
+          <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${fmtNum(it.boxes)}</td>
+            <td>${fmtNum(it.pieces_per_box, 0)}</td><td>${fmtNum(it.pieces, 0)}</td>
+            <td>${fmtNum(it.weight_kg)}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
           [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'toll_receipt', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
             { label: 'إغلاق', onClick: (b) => b.remove() }]);
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
-    function receiptForm(doc, customers, rawItems) {
+    function receiptForm(doc, customers, items) {
+      const suggest = doc ? null : api.invoke('tolling:suggestReceipt');
       const back = openModal(doc ? `تعديل سند استلام ${esc(doc.doc_number)}` : 'سند استلام خام عميل', `
         <div class="form-grid">
-          <div class="field"><label>رقم السند *</label><input id="f-num" value="${esc(doc ? doc.doc_number : '')}"></div>
+          <div class="field"><label>رقم السند *</label><input id="f-num" value="${esc(doc ? doc.doc_number : '')}" dir="ltr"></div>
           <div class="field"><label>التاريخ *</label><input id="f-date" type="date" value="${esc(doc ? doc.doc_date : today())}"></div>
           <div class="field"><label>العميل *</label>
             <select id="f-party"><option value="">— اختر العميل —</option>
@@ -131,7 +124,7 @@ register('tolling', {
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(doc ? doc.notes || '' : '')}"></div>
         </div>
         <div class="prows-head">
-          <span>الصنف (خام عميل)</span><span>عدد العلب</span><span>حبات/علبة</span><span>الوزن كجم (اختياري)</span><span>ملاحظات</span><span></span>
+          <span>الصنف</span><span>عدد العلب</span><span>حبات/علبة</span><span>الحبات</span><span>الوزن كجم</span><span>ملاحظات</span><span></span>
         </div>
         <div id="irows"></div>
         <button class="btn small" id="add-row" type="button">+ إضافة بند</button>`,
@@ -155,17 +148,19 @@ register('tolling', {
             b.remove(); toast('تم الحفظ', 'ok'); await load('receipts');
           } catch (e) { toast(String(e.message || e), 'err'); }
         } }, { label: 'إلغاء', onClick: (b) => b.remove() }]);
-      back.querySelector('.modal').style.minWidth = '860px';
+      back.querySelector('.modal').style.minWidth = '900px';
       const rowsWrap = back.querySelector('#irows');
-      const itemById = (id) => rawItems.find(i => i.id === id);
+      const itemById = (id) => items.find(i => i.id === id);
+      suggest.then(n => { if (!doc && n) back.querySelector('#f-num').value = n; }).catch(() => {});
 
       function addRow(data = {}) {
         const row = document.createElement('div');
         row.className = 'irow';
         row.innerHTML = `
-          <select class="p-item">${rawItems.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
+          <select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
           <input class="p-boxes" type="number" min="0" step="any" value="${esc(data.boxes ?? '')}">
           <input class="p-perbox" type="number" min="0" step="any" value="${esc(data.pieces_per_box ?? '')}">
+          <span class="p-calc muted"></span>
           <input class="p-weight" type="number" min="0" step="any" value="${esc(data.weight_kg ?? '')}">
           <input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}">
           <button class="btn mini danger p-del" type="button">×</button>`;
@@ -173,13 +168,23 @@ register('tolling', {
         row.querySelector('.p-del').onclick = () => row.remove();
         const itemSel = row.querySelector('.p-item');
         const perBox = row.querySelector('.p-perbox');
+        const boxes = row.querySelector('.p-boxes');
+        const calc = row.querySelector('.p-calc');
         const fillPerBox = () => {
           if (!perBox.value) {
             const item = itemById(Number(itemSel.value));
             if (item && item.pieces_per_carton) perBox.value = item.pieces_per_carton;
           }
+          update();
         };
+        function update() {
+          const b = parseFloat(boxes.value) || 0;
+          const p = parseFloat(perBox.value) || 0;
+          calc.textContent = b && p ? fmtNum(b * p, 0) + ' حبة' : '';
+        }
         itemSel.onchange = fillPerBox;
+        boxes.oninput = update;
+        perBox.oninput = update;
         if (data.item_id) itemSel.value = String(data.item_id);
         fillPerBox();
       }
@@ -200,18 +205,19 @@ register('tolling', {
             &nbsp; <b>فاتورة الأجرة:</b> ${esc(doc.invoice_number || '—')}</p>
           <table class="data"><thead><tr><th>الصنف</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td>
-            <td>${esc(it.quantity)} ${esc(it.unit)}</td><td>${Number(it.pieces).toLocaleString('en-US')}</td>
-            <td>${Number(it.weight_kg || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td></tr>`).join('')}</tbody></table>
+            <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td>
+            <td>${fmtNum(it.weight_kg)}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
           [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'toll_delivery', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
             { label: 'إغلاق', onClick: (b) => b.remove() }]);
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
-    function deliveryForm(doc, customers, goodsItems, feeItems) {
+    function deliveryForm(doc, customers, items) {
+      const suggest = doc ? null : api.invoke('tolling:suggestDelivery');
       const back = openModal(doc ? `تعديل سند تسليم ${esc(doc.doc_number)}` : 'سند تسليم منفوخ', `
         <div class="form-grid">
-          <div class="field"><label>رقم السند *</label><input id="f-num" value="${esc(doc ? doc.doc_number : '')}"></div>
+          <div class="field"><label>رقم السند *</label><input id="f-num" value="${esc(doc ? doc.doc_number : '')}" dir="ltr"></div>
           <div class="field"><label>التاريخ *</label><input id="f-date" type="date" value="${esc(doc ? doc.doc_date : today())}"></div>
           <div class="field"><label>العميل *</label>
             <select id="f-party"><option value="">— اختر العميل —</option>
@@ -219,9 +225,9 @@ register('tolling', {
             </select></div>
           <div class="field"><label>ملاحظات</label><input id="f-notes" value="${esc(doc ? doc.notes || '' : '')}"></div>
         </div>
-        <p id="bal-line" class="muted"></p>
+        <p id="bal-line" class="muted" style="margin:8px 0"></p>
         <div class="prows-head">
-          <span>الصنف (تام)</span><span>الكمية</span><span>الوحدة</span><span>الحبات</span><span>ملاحظات</span><span></span>
+          <span>الصنف</span><span>الكمية</span><span>الوحدة</span><span>الحبات</span><span>ملاحظات</span><span></span>
         </div>
         <div id="irows"></div>
         <button class="btn small" id="add-row" type="button">+ إضافة بند</button>
@@ -230,12 +236,12 @@ register('tolling', {
         </div>
         <div id="inv-wrap" hidden>
           <div class="form-grid">
-            <div class="field"><label>رقم الفاتورة *</label><input id="f-inv-num"></div>
+            <div class="field"><label>رقم الفاتورة *</label><input id="f-inv-num" dir="ltr"></div>
             <div class="field"><label>السائق</label><input id="f-inv-driver"></div>
             <div class="field"><label>رقم السيارة</label><input id="f-inv-car"></div>
           </div>
           <div class="prows-head">
-            <span>خدمة النفخ</span><span>الكمية (حبة)</span><span>السعر</span><span>الإجمالي</span><span></span>
+            <span>بند الأجرة</span><span>الكمية (حبة)</span><span>السعر</span><span>الإجمالي</span><span></span>
           </div>
           <div id="inv-rows"></div>
           <button class="btn small" id="add-inv-row" type="button">+ إضافة بند أجرة</button>
@@ -248,7 +254,6 @@ register('tolling', {
               unit: r.querySelector('.p-unit').value,
               notes: r.querySelector('.p-notes').value,
             }));
-            const invWrap = b.querySelector('#inv-wrap');
             const payload = {
               id: doc ? doc.id : null,
               doc_number: b.querySelector('#f-num').value,
@@ -275,10 +280,11 @@ register('tolling', {
             b.remove(); toast('تم الحفظ', 'ok'); await load('deliveries');
           } catch (e) { toast(String(e.message || e), 'err'); }
         } }, { label: 'إلغاء', onClick: (b) => b.remove() }]);
-      back.querySelector('.modal').style.minWidth = '860px';
+      back.querySelector('.modal').style.minWidth = '880px';
+      suggest.then(n => { if (!doc && n) back.querySelector('#f-num').value = n; }).catch(() => {});
 
       const rowsWrap = back.querySelector('#irows');
-      const itemById = (id) => goodsItems.find(i => i.id === id);
+      const itemById = (id) => items.find(i => i.id === id);
       const balLine = back.querySelector('#bal-line');
 
       async function refreshBal() {
@@ -288,7 +294,7 @@ register('tolling', {
           const bal = await api.invoke('tolling:balance');
           const row = bal.find(r => r.id === pid);
           balLine.textContent = row
-            ? `رصيد العميل المتبقي: ${Number(row.remaining).toLocaleString('en-US')} حبة (استلم ${Number(row.raw_in).toLocaleString('en-US')} — سلّم ${Number(row.delivered_out).toLocaleString('en-US')} — تالف ${Number(row.scrap_out).toLocaleString('en-US')})`
+            ? `رصيد العميل المتبقي: ${fmtNum(row.remaining, 0)} حبة (استلم ${fmtNum(row.raw_in, 0)} — سلّم ${fmtNum(row.delivered_out, 0)} — تالف ${fmtNum(row.scrap_out, 0)})`
             : '';
         } catch { balLine.textContent = ''; }
       }
@@ -298,10 +304,10 @@ register('tolling', {
         const row = document.createElement('div');
         row.className = 'irow';
         row.innerHTML = `
-          <select class="p-item">${goodsItems.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
+          <select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
           <input class="p-qty" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}">
           <select class="p-unit"></select>
-          <div class="p-bal"><span class="bal-text muted"></span></div>
+          <span class="p-calc muted"></span>
           <input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}">
           <button class="btn mini danger p-del" type="button">×</button>`;
         rowsWrap.appendChild(row);
@@ -309,26 +315,25 @@ register('tolling', {
         const itemSel = row.querySelector('.p-item');
         const unitSel = row.querySelector('.p-unit');
         const qty = row.querySelector('.p-qty');
-        const balText = row.querySelector('.bal-text');
-        const unitsFor = (item) => {
-          const u = ['piece'];
-          if (item.pieces_per_carton) u.push('carton');
-          if (item.pieces_per_bag) u.push('bag');
-          u.push('kg', 'ton');
-          return u;
-        };
-        const LABELS = { piece: 'حبة', carton: 'كرتون', bag: 'كيس', kg: 'كجم', ton: 'طن' };
-        const refresh = () => {
+        const calc = row.querySelector('.p-calc');
+        function refresh() {
           const item = itemById(Number(itemSel.value));
-          const opts = unitsFor(item);
-          unitSel.innerHTML = opts.map(u => `<option value="${u}">${LABELS[u]}</option>`).join('');
-          if (opts.includes(unitSel.value)) { /* keep */ } else if (data.unit && opts.includes(data.unit)) unitSel.value = data.unit;
-          const pieces = calcPieces(qty.value, unitSel.value, item);
-          balText.textContent = pieces > 0 ? `${pieces.toLocaleString('en-US')} حبة` : '';
-        };
+          if (!item) return;
+          const cur = unitSel.value;
+          const opts = unitOptionsFor(item);
+          unitSel.innerHTML = opts.map(o => `<option value="${o.value}">${esc(o.label)}</option>`).join('');
+          if (opts.some(o => o.value === cur)) unitSel.value = cur;
+          else if (data.unit && opts.some(o => o.value === data.unit)) unitSel.value = data.unit;
+          update();
+        }
+        function update() {
+          const item = itemById(Number(itemSel.value));
+          const pieces = toPieces(qty.value, unitSel.value, item);
+          calc.textContent = pieces != null ? fmtNum(pieces, 0) + ' حبة' : '—';
+        }
         itemSel.onchange = refresh;
-        unitSel.onchange = refresh;
-        qty.oninput = refresh;
+        unitSel.onchange = update;
+        qty.oninput = update;
         if (data.item_id) itemSel.value = String(data.item_id);
         refresh();
       }
@@ -349,7 +354,7 @@ register('tolling', {
         const row = document.createElement('div');
         row.className = 'irow';
         row.innerHTML = `
-          <select class="p-item">${feeItems.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
+          <select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
           <input class="p-qty" type="number" min="0" step="any" value="0">
           <input class="p-price" type="number" min="0" step="any" value="">
           <span class="p-calc muted">0</span>
@@ -359,12 +364,12 @@ register('tolling', {
         const update = () => {
           const q = parseFloat(row.querySelector('.p-qty').value) || 0;
           const p = parseFloat(row.querySelector('.p-price').value) || 0;
-          row.querySelector('.p-calc').textContent = (q * p).toLocaleString('en-US', { maximumFractionDigits: 2 });
+          row.querySelector('.p-calc').textContent = fmtNum(q * p);
         };
         row.querySelector('.p-qty').oninput = update;
         row.querySelector('.p-price').oninput = update;
         const fillPrice = () => {
-          const item = feeItems.find(i => i.id === Number(row.querySelector('.p-item').value));
+          const item = items.find(i => i.id === Number(row.querySelector('.p-item').value));
           if (item && item.service_price) row.querySelector('.p-price').value = item.service_price;
           update();
         };

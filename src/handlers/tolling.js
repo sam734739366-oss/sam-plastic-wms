@@ -14,6 +14,9 @@ function customerBalance(db, partyId) {
 }
 
 module.exports = function register(ipcMain) {
+  ipcMain.handle('tolling:suggestReceipt', () => suggestNumber(getDb(), 'customer_raw_receipts'));
+  ipcMain.handle('tolling:suggestDelivery', () => suggestNumber(getDb(), 'customer_deliveries'));
+
   ipcMain.handle('tolling:receiptsList', () => {
     const db = getDb();
     return db.prepare(`SELECT r.*, p.name party_name,
@@ -58,7 +61,6 @@ module.exports = function register(ipcMain) {
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
-        if (item.item_group !== 3) throw new Error(`الصنف ${item.code} ليس خام عميل (مجموعة 003)`);
         const boxes = Math.max(0, Number(it.boxes) || 0);
         const perBox = Math.max(0, Number(it.pieces_per_box) || item.pieces_per_carton || 0);
         const pieces = boxes * perBox;
@@ -135,7 +137,6 @@ module.exports = function register(ipcMain) {
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
-        if (item.item_group !== 2) throw new Error(`الصنف ${item.code} ليس من الإنتاج التام`);
         const pieces = toPieces(it.quantity, it.unit, item);
         if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
@@ -159,10 +160,9 @@ module.exports = function register(ipcMain) {
         for (const it of inv.items || []) {
           const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
           if (!item) throw new Error('صنف غير موجود');
-          if (item.item_group !== 4) throw new Error(`الصنف ${item.code} ليس خدمة نفخ (مجموعة 004)`);
           const qty = Number(it.quantity) || 0;
           const price = Number(it.unit_price) || 0;
-          insInv.run(invoiceId, item.id, 1, qty, 'piece', Math.round(qty), 0, price, qty * price, it.notes || null);
+          insInv.run(invoiceId, item.id, 1, qty, 'حبة', Math.round(qty), 0, price, qty * price, it.notes || null);
         }
       }
       if (id) {
