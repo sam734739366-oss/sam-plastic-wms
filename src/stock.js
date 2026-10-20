@@ -28,11 +28,14 @@ function bucketsDelta(db, itemId, deltas = {}) {
 }
 
 // تجميع دلتا سليم لأصناف مكررة في بنود مستند: +داخل أو -خارج
+// يقبل بنود المشتريات/الصرف (pieces) وحركات المخزون (qty_in_pieces / qty_out_pieces)
 function applySalemDelta(db, items, sign) {
   const byItem = new Map();
   for (const it of items) {
-    if (!it.item_id || !it.pieces) continue;
-    byItem.set(it.item_id, (byItem.get(it.item_id) || 0) + it.pieces);
+    const itemId = it.item_id;
+    const pieces = Math.abs(it.pieces != null ? it.pieces : ((it.qty_in_pieces || 0) - (it.qty_out_pieces || 0)));
+    if (!itemId || !pieces) continue;
+    byItem.set(itemId, (byItem.get(itemId) || 0) + pieces);
   }
   for (const [itemId, pieces] of byItem) {
     bucketsDelta(db, itemId, { salem: sign * pieces });

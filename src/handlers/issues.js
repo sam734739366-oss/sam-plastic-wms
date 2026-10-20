@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance } = require('../stock');
+const { writeMoves, voidDoc, getBalance, applySalemDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 module.exports = function register(ipcMain) {
@@ -57,10 +57,12 @@ module.exports = function register(ipcMain) {
     const before = isNew ? null : db.prepare('SELECT * FROM issue_permits WHERE id=?').get(doc.id);
     let id = doc.id;
     withTransaction(db, () => {
+      let oldItems = [];
       if (id) {
         const hasResults = db.prepare(`SELECT COUNT(*) c FROM production_results pr
           JOIN cartons c ON c.id=pr.carton_id WHERE c.issue_permit_id=?`).get(id).c;
         if (hasResults > 0) throw new Error('لا يمكن تعديل التصريح — توجد نتائج إنتاج مسجلة على كراتينه');
+        oldItems = db.prepare('SELECT * FROM issue_items WHERE issue_permit_id=?').all(id);
         db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);
         db.prepare('DELETE FROM issue_items WHERE issue_permit_id=?').run(id);
         db.prepare(`UPDATE issue_permits SET doc_number=?, doc_date=?, machine_id=?, shift_id=?, receiver_name=?, source=?, party_id=?, notes=? WHERE id=?`)
@@ -97,6 +99,9 @@ module.exports = function register(ipcMain) {
           cartonIds.length ? JSON.stringify(cartonIds) : null, it.notes || null);
       }
       writeMoves(db, 'issue', id, number, doc.doc_date, moves, userId);
+      // أرصدة سليم/تالف/محرز: صرف المصنع ينقص السليم (وعكس القديم عند التعديل)
+      if (oldItems.length) applySalemDelta(db, oldItems, 1);
+      applySalemDelta(db, moves, -1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'issue_permit', id, before, doc);
     return { id };
@@ -109,9 +114,11 @@ module.exports = function register(ipcMain) {
     const hasResults = db.prepare(`SELECT COUNT(*) c FROM production_results pr
       JOIN cartons c ON c.id=pr.carton_id WHERE c.issue_permit_id=?`).get(id).c;
     if (hasResults > 0) throw new Error('لا يمكن إلغاء التصريح — توجد نتائج إنتاج مسجلة على كراتينه، احذفها أولاً');
+    const oldItems = db.prepare('SELECT * FROM issue_items WHERE issue_permit_id=?').all(id);
     withTransaction(db, () => {
       db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);
       voidDoc(db, 'issue', id, userId);
+      applySalemDelta(db, oldItems, 1);
       db.prepare(`UPDATE issue_permits SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'issue_permit', id, before, null);

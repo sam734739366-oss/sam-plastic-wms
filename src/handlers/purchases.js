@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc } = require('../stock');
+const { writeMoves, voidDoc, applySalemDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 function nextCartonNumbers(db, prefix, count) {
@@ -33,8 +33,8 @@ module.exports = function register(ipcMain) {
     const doc = db.prepare(`SELECT p.*, pa.name party_name FROM purchases p
       LEFT JOIN parties pa ON pa.id=p.party_id WHERE p.id=?`).get(id);
     if (!doc) throw new Error('الفاتورة غير موجودة');
-    doc.items = db.prepare(`SELECT pi.*, i.code, i.name, i.weight_grams, i.pieces_per_carton, i.pieces_per_bag, i.unit_name,
-        w.name warehouse_name
+    doc.items = db.prepare(`SELECT pi.*, i.code, i.name, i.weight_grams, i.pieces_per_carton,
+        i.pieces_per_shadda, i.pieces_per_bag, i.unit_name, w.name warehouse_name
       FROM purchase_items pi JOIN items i ON i.id=pi.item_id JOIN warehouses w ON w.id=pi.warehouse_id
       WHERE pi.purchase_id=? ORDER BY pi.id`).all(id);
     doc.cartons = db.prepare('SELECT * FROM cartons WHERE purchase_id=? ORDER BY carton_number').all(id);
@@ -52,9 +52,11 @@ module.exports = function register(ipcMain) {
     const before = isNew ? null : db.prepare('SELECT * FROM purchases WHERE id=?').get(doc.id);
     let id = doc.id;
     withTransaction(db, () => {
+      let oldItems = [];
       if (id) {
         const issued = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE purchase_id=? AND status != 'in_stock'`).get(id).c;
         if (issued > 0) throw new Error('يوجد كراتين من هذه الفاتورة صُرفت للإنتاج — ألغِ تصريح الصرف أولاً قبل التعديل');
+        oldItems = db.prepare('SELECT * FROM purchase_items WHERE purchase_id=?').all(id);
         db.prepare('DELETE FROM purchase_items WHERE purchase_id=?').run(id);
         db.prepare('DELETE FROM cartons WHERE purchase_id=?').run(id);
         db.prepare('UPDATE purchases SET doc_number=?, doc_date=?, party_id=?, notes=? WHERE id=?')
@@ -77,9 +79,12 @@ module.exports = function register(ipcMain) {
         moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, notes: it.notes });
       }
       writeMoves(db, 'purchase', id, number, doc.doc_date, moves, userId);
+      // أرصدة سليم/تالف/محرز: الشراء يزيد السليم (وعكس القديم عند التعديل)
+      if (oldItems.length) applySalemDelta(db, oldItems, -1);
+      applySalemDelta(db, moves, 1);
       const insCarton = db.prepare(`INSERT INTO cartons (carton_number, item_id, purchase_id, pieces) VALUES (?,?,?,?)`);
       for (const it of doc.items) {
-        if (it.unit !== 'carton') continue;
+        if (it.unit !== 'كرتون') continue;
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item.pieces_per_carton) continue;
         const prefix = String(it.carton_prefix || '').trim();
@@ -98,9 +103,11 @@ module.exports = function register(ipcMain) {
     if (!before) throw new Error('الفاتورة غير موجودة');
     const issued = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE purchase_id=? AND status != 'in_stock'`).get(id).c;
     if (issued > 0) throw new Error('يوجد كراتين من هذه الفاتورة صُرفت للإنتاج — ألغِ تصريح الصرف أولاً');
+    const oldItems = db.prepare('SELECT * FROM purchase_items WHERE purchase_id=?').all(id);
     withTransaction(db, () => {
       db.prepare('DELETE FROM cartons WHERE purchase_id=?').run(id);
       voidDoc(db, 'purchase', id, userId);
+      applySalemDelta(db, oldItems, -1);
       db.prepare(`UPDATE purchases SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'purchase', id, before, null);
