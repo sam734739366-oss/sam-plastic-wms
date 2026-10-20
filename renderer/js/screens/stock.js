@@ -1,8 +1,7 @@
 import { register } from '../router.js';
 import { api } from '../api.js';
 import { toast, renderTable, esc } from '../ui.js';
-
-const GROUP_NAMES = { 1: 'مواد أولية', 2: 'إنتاج تام', 3: 'خام للغير', 4: 'خدمات نفخ', 5: 'توالف' };
+import { fmtNum } from '../fmt.js';
 
 register('stock', {
   title: 'جرد المخزون',
@@ -12,8 +11,6 @@ register('stock', {
       <div class="toolbar">
         <select id="f-warehouse"><option value="">كل المخازن</option>
           ${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select>
-        <select id="f-group"><option value="">كل المجموعات</option>
-          ${[1, 2, 3, 4, 5].map(g => `<option value="${g}">${g} — ${GROUP_NAMES[g]}</option>`).join('')}</select>
         <button class="btn primary" id="btn-run">عرض الجرد</button>
       </div>
       <div class="summary-line" id="summary"></div>
@@ -23,25 +20,27 @@ register('stock', {
       try {
         const filters = {
           warehouseId: Number(el.querySelector('#f-warehouse').value) || null,
-          group: Number(el.querySelector('#f-group').value) || null,
         };
         const rows = await api.invoke('reports:inventory', filters);
         const totalPieces = rows.reduce((s, r) => s + r.balance_pieces, 0);
         const totalKg = rows.reduce((s, r) => s + r.balance_kg, 0);
         el.querySelector('#summary').innerHTML =
-          `<b>عدد الأصناف:</b> ${rows.length} &nbsp; <b>إجمالي الحبات:</b> ${totalPieces.toLocaleString('en-US')} &nbsp; <b>إجمالي الوزن:</b> ${totalKg.toLocaleString('en-US', { maximumFractionDigits: 2 })} كجم`;
+          `<b>عدد الأصناف:</b> ${rows.length} &nbsp; <b>إجمالي الحبات:</b> ${fmtNum(totalPieces, 0)} &nbsp; <b>إجمالي الوزن:</b> ${fmtNum(totalKg)} كجم`;
         renderTable(el.querySelector('#table-wrap'), [
-          { key: 'code', label: 'الكود' },
+          { key: 'code', label: 'الكود', render: r => `<span dir="ltr">${esc(r.code)}</span>` },
           { key: 'name', label: 'الصنف' },
-          { key: 'item_group', label: 'المجموعة', render: r => GROUP_NAMES[r.item_group] || r.item_group },
-          { key: 'balance_label', label: 'الرصيد' },
-          { key: 'balance_kg', label: 'الوزن كجم', render: r => Number(r.balance_kg || 0).toLocaleString('en-US', { maximumFractionDigits: 2 }) },
+          { key: 'unit_name', label: 'الوحدة' },
+          { key: 'balance_label', label: 'الرصيد المخزني' },
+          { key: 'qty_salem', label: 'سليم', render: r => fmtNum(r.qty_salem, 0) },
+          { key: 'qty_talef', label: 'تالف', render: r => fmtNum(r.qty_talef, 0) },
+          { key: 'qty_muharraz', label: 'محرز', render: r => fmtNum(r.qty_muharraz, 0) },
+          { key: 'balance_kg', label: 'الوزن كجم', render: r => fmtNum(r.balance_kg) },
         ], rows);
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
     el.querySelector('#btn-run').onclick = load;
-    el.querySelectorAll('#f-warehouse, #f-group').forEach(s => s.onchange = load);
+    el.querySelector('#f-warehouse').onchange = load;
     await load();
   },
 });

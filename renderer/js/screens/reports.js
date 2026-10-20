@@ -1,6 +1,7 @@
 import { register } from '../router.js';
 import { api } from '../api.js';
 import { toast, esc } from '../ui.js';
+import { fmtMoney } from '../fmt.js';
 
 const N = (n, d = 0) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: d });
 const DOC_LABEL = { purchase: 'شراء', issue: 'صرف إنتاج', receive: 'استلام', invoice: 'فاتورة', exit: 'خروج', scrap: 'تالف', transfer: 'نقل' };
@@ -134,9 +135,9 @@ register('reports', {
           { label: 'التاريخ', cell: r => r.doc_date },
           { label: 'المورد', cell: r => r.party_name || '—' },
           { label: 'الحبات', cell: r => N(r.total_pieces) },
-          { label: 'الإجمالي (ريال)', cell: r => N(r.total, 2) },
+          { label: 'الإجمالي', cell: r => fmtMoney(r.total) },
         ],
-        foot: (data) => `<div class="notes"><b>إجمالي المشتريات: ${N(data.total, 2)} ريال — عدد الفواتير: ${data.rows.length}</b></div>`,
+        foot: (data) => `<div class="notes"><b>إجمالي المشتريات: ${fmtMoney(data.total)} — عدد الفواتير: ${data.rows.length}</b></div>`,
       },
       sales: {
         label: 'تقرير المبيعات',
@@ -154,9 +155,29 @@ register('reports', {
           { label: 'التاريخ', cell: r => r.doc_date },
           { label: 'النوع', cell: r => INV_LABEL[r.invoice_type] || r.invoice_type },
           { label: 'العميل', cell: r => r.party_name || '—' },
-          { label: 'الإجمالي (ريال)', cell: r => N(r.total, 2) },
+          { label: 'الإجمالي', cell: r => fmtMoney(r.total) },
         ],
-        foot: (data) => `<div class="notes"><b>إجمالي المبيعات: ${N(data.total, 2)} ريال — عدد الفواتير: ${data.rows.length}</b></div>`,
+        foot: (data) => `<div class="notes"><b>إجمالي المبيعات: ${fmtMoney(data.total)} — عدد الفواتير: ${data.rows.length}</b></div>`,
+      },
+      statement: {
+        label: 'كشف حساب طرف',
+        filterHtml: () => `
+          <div class="field"><label>الطرف</label>${selectHtml('r-party', parties.map(p => ({ value: p.id, label: p.name })))}</div>
+          <div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
+          <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>`,
+        getFilters: (el) => ({
+          partyId: Number(el.querySelector('#r-party').value) || null,
+          from: el.querySelector('#r-from').value || null,
+          to: el.querySelector('#r-to').value || null,
+        }),
+        columns: [
+          { label: 'التاريخ', cell: r => r.doc_date },
+          { label: 'البيان', cell: r => r.label },
+          { label: 'الرقم', cell: r => r.doc_number },
+          { label: 'عليه', cell: r => r.debit ? fmtMoney(r.debit) : '' },
+          { label: 'له', cell: r => r.credit ? fmtMoney(r.credit) : '' },
+        ],
+        foot: (data) => `<div class="notes"><b>عليه: ${fmtMoney(data.total_debit)} &nbsp; له: ${fmtMoney(data.total_credit)} &nbsp; الصافي: ${fmtMoney(data.net)}</b></div>`,
       },
       audit: {
         label: 'سجل التدقيق',

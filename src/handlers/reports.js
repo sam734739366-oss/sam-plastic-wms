@@ -12,19 +12,18 @@ function csvCell(v) {
 module.exports = function register(ipcMain) {
   ipcMain.handle('reports:inventory', (e, filters = {}) => {
     const db = getDb();
-    const where = [];
     const params = [];
     let joinWh = '';
     if (filters.warehouseId) { joinWh = ' AND m.warehouse_id = ?'; params.push(filters.warehouseId); }
-    if (filters.group) { where.push('i.item_group = ?'); params.push(filters.group); }
-    const wh = where.length ? ' WHERE ' + where.join(' AND ') : '';
-    const rows = db.prepare(`SELECT i.id, i.code, i.name, i.item_group, i.unit_name, i.weight_grams, i.pieces_per_carton,
+    const rows = db.prepare(`SELECT i.id, i.code, i.name, i.unit_name, i.weight_grams, i.pieces_per_carton,
+        i.pieces_per_shadda, i.pieces_per_bag,
+        i.qty_salem, i.qty_talef, i.qty_muharraz,
         COALESCE(SUM(m.qty_in_pieces),0) in_pieces,
         COALESCE(SUM(m.qty_out_pieces),0) out_pieces,
         COALESCE(SUM(m.qty_in_pieces),0) - COALESCE(SUM(m.qty_out_pieces),0) balance_pieces,
         COALESCE(SUM(m.weight_in_kg),0) - COALESCE(SUM(m.weight_out_kg),0) balance_kg
-      FROM items i LEFT JOIN stock_moves m ON m.item_id = i.id${joinWh}${wh}
-      GROUP BY i.id ORDER BY i.item_group, i.code`).all(...params);
+      FROM items i LEFT JOIN stock_moves m ON m.item_id = i.id${joinWh}
+      GROUP BY i.id ORDER BY i.code`).all(...params);
     return rows.map(r => ({ ...r, balance_label: formatQty(r.balance_pieces, r) }));
   });
 
@@ -123,6 +122,39 @@ module.exports = function register(ipcMain) {
       WHERE ${where.join(' AND ')}
       ORDER BY inv.doc_date DESC, inv.id DESC`).all(...params);
     return { rows, total: rows.reduce((s, r) => s + r.total, 0) };
+  });
+
+  ipcMain.handle('reports:partyStatement', (e, filters = {}) => {
+    const db = getDb();
+    if (!filters.partyId) throw new Error('اختر الطرف');
+    const party = db.prepare('SELECT * FROM parties WHERE id=?').get(filters.partyId);
+    if (!party) throw new Error('الطرف غير موجود');
+    const where = [];
+    const params = [];
+    if (filters.from) { where.push('doc_date >= ?'); params.push(filters.from); }
+    if (filters.to) { where.push('doc_date <= ?'); params.push(filters.to); }
+    const wh = where.length ? ` AND ${where.join(' AND ')}` : '';
+    const rows = [];
+    // فواتير على الطرف (عليه)
+    db.prepare(`SELECT inv.id, inv.doc_number, inv.doc_date, inv.invoice_type, inv.status,
+        COALESCE((SELECT SUM(total_price) FROM invoice_items ii WHERE ii.invoice_id=inv.id),0) total
+      FROM invoices inv WHERE inv.party_id=?${wh} ORDER BY inv.doc_date, inv.id`).all(filters.partyId, ...params)
+      .forEach(r => {
+        if (r.status !== 'active') return;
+        rows.push({ doc_date: r.doc_date, label: r.invoice_type === 'sale' ? 'فاتورة بيع' : r.invoice_type === 'scrap' ? 'فاتورة خردة' : 'فاتورة أجرة نفخ', doc_number: r.doc_number, debit: r.total, credit: 0 });
+      });
+    // مشتريات من الطرف (له)
+    db.prepare(`SELECT p.id, p.doc_number, p.doc_date, p.status,
+        COALESCE((SELECT SUM(total_price) FROM purchase_items pi WHERE pi.purchase_id=p.id),0) total
+      FROM purchases p WHERE p.party_id=?${wh} ORDER BY p.doc_date, p.id`).all(filters.partyId, ...params)
+      .forEach(r => {
+        if (r.status !== 'active') return;
+        rows.push({ doc_date: r.doc_date, label: 'فاتورة شراء', doc_number: r.doc_number, debit: 0, credit: r.total });
+      });
+    rows.sort((a, b) => (a.doc_date < b.doc_date ? -1 : a.doc_date > b.doc_date ? 1 : a.doc_number < b.doc_number ? -1 : 1));
+    const total_debit = rows.reduce((s, r) => s + r.debit, 0);
+    const total_credit = rows.reduce((s, r) => s + r.credit, 0);
+    return { party: { id: party.id, name: party.name, type: party.type, phone: party.phone, address: party.address }, rows, total_debit, total_credit, net: total_credit - total_debit };
   });
 
   ipcMain.handle('reports:audit', (e, filters = {}) => {

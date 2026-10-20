@@ -4,7 +4,6 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 const { setDb } = require('../src/db');
-const { getBalance } = require('../src/stock');
 const templates = require('../src/print/templates');
 
 function makeDb() {
@@ -34,11 +33,11 @@ function stubIpc(files) {
 function stockIn(db, h, warehouseId, itemId, pieces) {
   h['purchases:save'](null, {
     doc_number: `P-${Math.random().toString(36).slice(2, 8)}`, doc_date: '2026-10-18',
-    items: [{ item_id: itemId, warehouse_id: warehouseId, quantity: pieces, unit: 'piece' }]
+    items: [{ item_id: itemId, warehouse_id: warehouseId, quantity: pieces, unit: 'حبة' }]
   }, 1);
 }
 
-test('reports:inventory returns balances with labels and group filter', () => {
+test('reports:inventory returns balances with labels and warehouse filter', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'reports']);
   stockIn(db, h, 1, 1, 1500);
@@ -46,9 +45,6 @@ test('reports:inventory returns balances with labels and group filter', () => {
   const row = all.find(r => r.id === 1);
   assert.equal(row.balance_pieces, 1500);
   assert.ok(row.balance_label.includes('عبوة'));
-  const grouped = h['reports:inventory'](null, { group: 5 });
-  assert.equal(grouped.length, 1);
-  assert.equal(grouped[0].code, '005-001');
   const wh = h['reports:inventory'](null, { warehouseId: 2 });
   assert.equal(wh.find(r => r.id === 1).balance_pieces, 0);
 });
@@ -58,11 +54,11 @@ test('reports:movement computes running balance in date order', () => {
   const h = stubIpc(['purchases', 'sales', 'reports']);
   h['purchases:save'](null, {
     doc_number: 'P-1', doc_date: '2026-10-10',
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 1000, unit: 'piece' }]
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 1000, unit: 'حبة' }]
   }, 1);
   h['sales:save'](null, {
     doc_number: '1', doc_date: '2026-10-12', invoice_type: 'sale', party_id: 2,
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 400, unit: 'piece', unit_price: 10 }]
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 400, unit: 'حبة', unit_price: 10 }]
   }, 1);
   const rows = h['reports:movement'](null, { itemId: 1 });
   assert.equal(rows.length, 2);
@@ -77,13 +73,13 @@ test('reports:production lists results with carton, issue and totals', () => {
   db.prepare('UPDATE items SET pieces_per_carton=100 WHERE id=1').run();
   const { id: purchaseId } = h['purchases:save'](null, {
     doc_number: 'P-1', doc_date: '2026-10-10', party_id: 1,
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'carton', carton_prefix: 'KR' }]
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'كرتون', carton_prefix: 'KR' }]
   }, 1);
   const cartons = db.prepare('SELECT * FROM cartons WHERE purchase_id=? ORDER BY id').all(purchaseId);
   assert.equal(cartons.length, 2);
   const { id: issueId } = h['issues:save'](null, {
     doc_number: 'I-1', doc_date: '2026-10-11', source: 'own',
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'carton', carton_ids: cartons.map(c => c.carton_number) }]
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'كرتون', carton_ids: cartons.map(c => c.carton_number) }]
   }, 1);
   assert.equal(issueId > 0, true);
   h['production:save'](null, {
@@ -117,11 +113,11 @@ test('reports:purchases and reports:sales aggregate totals', () => {
   const h = stubIpc(['purchases', 'sales', 'reports']);
   h['purchases:save'](null, {
     doc_number: 'P-1', doc_date: '2026-10-10', party_id: 1,
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 100, unit: 'piece', unit_price: 5 }]
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 100, unit: 'حبة', unit_price: 5 }]
   }, 1);
   h['sales:save'](null, {
     doc_number: '1', doc_date: '2026-10-12', invoice_type: 'sale', party_id: 2,
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 40, unit: 'piece', unit_price: 12 }]
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 40, unit: 'حبة', unit_price: 12 }]
   }, 1);
   const p = h['reports:purchases'](null, { from: '2026-10-01' });
   assert.equal(p.total, 500);
@@ -142,6 +138,53 @@ test('reports:audit returns audit rows with user name', () => {
   assert.equal(top.entity, 'purchase');
   assert.equal(top.user_name, 'المدير');
   assert.equal(h['reports:audit'](null, { userId: 999 }).length, 0);
+});
+
+test('reports:partyStatement lists invoices as debit and purchases as credit', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'sales', 'reports']);
+  h['purchases:save'](null, {
+    doc_number: 'P-1', doc_date: '2026-10-10', party_id: 1,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 100, unit: 'حبة', unit_price: 5 }]
+  }, 1);
+  h['sales:save'](null, {
+    doc_number: '1', doc_date: '2026-10-12', invoice_type: 'sale', party_id: 2,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 40, unit: 'حبة', unit_price: 12 }]
+  }, 1);
+  const sup = h['reports:partyStatement'](null, { partyId: 1 });
+  assert.equal(sup.party.name, 'مورد تجريبي');
+  assert.equal(sup.total_credit, 500);
+  assert.equal(sup.total_debit, 0);
+  assert.equal(sup.net, 500);
+  const cust = h['reports:partyStatement'](null, { partyId: 2 });
+  assert.equal(cust.total_debit, 480);
+  assert.equal(cust.net, -480);
+  assert.equal(cust.rows[0].label, 'فاتورة بيع');
+  assert.throws(() => h['reports:partyStatement'](null, {}), /اختر الطرف/);
+});
+
+test('dashboard:summary reports counts, buckets and month totals without groups', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'sales', 'scrap', 'dashboard']);
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  h['purchases:save'](null, {
+    doc_number: 'P-1', doc_date: todayStr, party_id: 1,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 100, unit: 'حبة', unit_price: 5 }]
+  }, 1);
+  h['sales:save'](null, {
+    doc_number: '1', doc_date: todayStr, invoice_type: 'sale', party_id: 2,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 20, unit: 'حبة', unit_price: 12 }]
+  }, 1);
+  const s = h['dashboard:summary']();
+  assert.equal(s.items_count, 2);
+  assert.equal(s.salem_pieces, 80);
+  assert.equal(s.talef_pieces, 0);
+  assert.equal(s.muharraz_pieces, 0);
+  assert.equal(s.today_docs, 2);
+  assert.equal(s.month_purchases, 500);
+  assert.equal(s.month_sales, 240);
+  assert.equal(s.pending_cartons, 0);
 });
 
 test('print templates escape values and use factory settings', () => {
