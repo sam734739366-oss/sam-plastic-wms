@@ -52,7 +52,7 @@ ipcMain.handle('print:open', (e, payload) => {
 app.whenReady().then(() => {
   require('./src/db').getDb();
   require('./src/ipc')(ipcMain);
-  createMainWindow();
+  const mainWin = createMainWindow();
   setInterval(() => { try { backup.createBackup(); } catch { /* ignore */ } }, 24 * 60 * 60 * 1000);
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createMainWindow(); });
 });
