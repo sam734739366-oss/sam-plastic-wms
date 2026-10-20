@@ -201,6 +201,14 @@ test('print templates escape values and use factory settings', () => {
   assert.ok(!html.includes('<b>غريب</b>'));
   assert.ok(html.includes('&lt;script&gt;'));
   assert.ok(html.includes('المستلم'));
+  // العملة الافتراضية ريال يمني وتظهر بالرمز
+  assert.ok(html.includes('ر.ي'));
+  const sar = templates.purchaseTemplate(doc, { ...settings, currency: 'SAR' });
+  assert.ok(sar.includes('ر.س'));
+  const usd = templates.purchaseTemplate(doc, { ...settings, currency: 'USD' });
+  assert.ok(usd.includes('$'));
+  // ترويسة الديزاين الجديد (كحلي)
+  assert.ok(html.includes('#1e3a8a'));
   const report = templates.reportTemplate(settings, 'جرد', ['تاريخ: 2026-10-10'], ['الصنف', 'الرصيد'], [['عبوة', '100']]);
   assert.ok(report.includes('جرد'));
   assert.ok(!report.includes('المستلم'));
