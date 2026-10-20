@@ -23,6 +23,11 @@ function migrate(d) {
   add('qty_salem', 'qty_salem INTEGER NOT NULL DEFAULT 0');
   add('qty_talef', 'qty_talef INTEGER NOT NULL DEFAULT 0');
   add('qty_muharraz', 'qty_muharraz INTEGER NOT NULL DEFAULT 0');
+  // ترحيل قيمة العملة القديمة (اسم) إلى الرمز الجديد
+  const cur = d.prepare("SELECT value FROM settings WHERE key='currency'").get();
+  if (cur && !['YER', 'SAR', 'USD'].includes(cur.value)) {
+    d.prepare("UPDATE settings SET value='YER' WHERE key='currency'").run();
+  }
 }
 
 function getDb() {
@@ -69,7 +74,7 @@ function seed(d) {
   if (!s.get('factory_name')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('factory_name', 'سام بلاستيك');
   if (!s.get('doc_page_size')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('doc_page_size', 'A5');
   if (!s.get('report_page_size')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('report_page_size', 'A4');
-  if (!s.get('currency')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('currency', 'ريال يمني');
+  if (!s.get('currency')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('currency', 'YER');
 }
 
 module.exports = { getDb, setDb, withTransaction, dataDir };

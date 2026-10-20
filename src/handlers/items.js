@@ -13,7 +13,9 @@ function normalizeCode(v) {
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('items:list', () => {
-    return getDb().prepare('SELECT * FROM items ORDER BY code').all();
+    return getDb().prepare(`SELECT i.*,
+        EXISTS(SELECT 1 FROM stock_moves m WHERE m.item_id = i.id) has_moves
+      FROM items i ORDER BY i.code`).all();
   });
 
   ipcMain.handle('items:save', (e, row, userId) => {
@@ -30,6 +32,9 @@ module.exports = function register(ipcMain) {
 
     const isNew = !row.id;
     const before = isNew ? null : db.prepare('SELECT * FROM items WHERE id=?').get(row.id);
+    // كميات سليم/تالف/محرز تُحرَّك تلقائياً من المستندات؛ تُقبل كأرصدة افتتاحية فقط
+    // لصنف جديد أو صنف لم تتحرك له حركات مخزون بعد.
+    const hasMoves = !isNew && db.prepare('SELECT COUNT(*) c FROM stock_moves WHERE item_id=?').get(row.id).c > 0;
     let id = row.id;
     const fields = {
       code, name, unit_name: unit,
@@ -43,10 +48,21 @@ module.exports = function register(ipcMain) {
       notes: row.notes || null,
     };
     if (id) {
-      db.prepare(`UPDATE items SET code=@code,name=@name,unit_name=@unit_name,weight_grams=@weight_grams,
+      const updateSql = `UPDATE items SET code=@code,name=@name,unit_name=@unit_name,weight_grams=@weight_grams,
         pieces_per_carton=@pieces_per_carton,pieces_per_shadda=@pieces_per_shadda,pieces_per_bag=@pieces_per_bag,
-        qty_salem=@qty_salem,qty_talef=@qty_talef,qty_muharraz=@qty_muharraz,notes=@notes WHERE id=@id`)
-        .run({ ...fields, id });
+        ${hasMoves ? '' : 'qty_salem=@qty_salem,qty_talef=@qty_talef,qty_muharraz=@qty_muharraz,'}
+        notes=@notes WHERE id=@id`;
+      const params = {
+        code, name, unit_name: unit, weight_grams: fields.weight_grams,
+        pieces_per_carton: fields.pieces_per_carton, pieces_per_shadda: fields.pieces_per_shadda,
+        pieces_per_bag: fields.pieces_per_bag, notes: fields.notes, id,
+      };
+      if (!hasMoves) {
+        params.qty_salem = fields.qty_salem;
+        params.qty_talef = fields.qty_talef;
+        params.qty_muharraz = fields.qty_muharraz;
+      }
+      db.prepare(updateSql).run(params);
     } else {
       id = db.prepare(`INSERT INTO items (code,name,item_group,unit_name,weight_grams,pieces_per_carton,
         pieces_per_shadda,pieces_per_bag,qty_salem,qty_talef,qty_muharraz,notes)

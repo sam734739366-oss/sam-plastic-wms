@@ -44,6 +44,7 @@ function qtyCell(r, key, cls, label) {
 
 function collect(back) {
   const v = (id) => back.querySelector(`#${id}`)?.value ?? '';
+  const locked = back.dataset.lock === '1';
   return {
     id: back.dataset.editId ? Number(back.dataset.editId) : null,
     code: digitsOnly(v('f-code')),
@@ -53,9 +54,9 @@ function collect(back) {
     pieces_per_carton: num(v('f-carton')) || null,
     pieces_per_shadda: num(v('f-shadda')) || null,
     pieces_per_bag: num(v('f-bag')) || null,
-    qty_salem: num(v('f-salem')) || 0,
-    qty_talef: num(v('f-talef')) || 0,
-    qty_muharraz: num(v('f-muharraz')) || 0,
+    qty_salem: locked ? undefined : (num(v('f-salem')) || 0),
+    qty_talef: locked ? undefined : (num(v('f-talef')) || 0),
+    qty_muharraz: locked ? undefined : (num(v('f-muharraz')) || 0),
     notes: v('f-notes').trim() || null,
   };
 }
@@ -182,6 +183,7 @@ register('items', {
     }
 
     function edit(row, onSaved) {
+      const locked = !!row?.has_moves;
       const back = openModal(row ? 'تعديل صنف' : 'إضافة صنف', `
         <div class="form-grid">
           <div class="field"><label>كود الصنف * (أرقام فقط)</label><input id="f-code" inputmode="numeric" value="${esc(row?.code || '')}" placeholder="مثال: 101"></div>
@@ -193,11 +195,12 @@ register('items', {
           <div class="field"><label>عدد القطع في الكرتون (اختياري)</label><input id="f-carton" inputmode="numeric" value="${esc(row?.pieces_per_carton || '')}"></div>
           <div class="field"><label>عدد القطع في الشدة (اختياري)</label><input id="f-shadda" inputmode="numeric" value="${esc(row?.pieces_per_shadda || '')}"></div>
           <div class="field"><label>عدد القطع في الكيس (اختياري)</label><input id="f-bag" inputmode="numeric" value="${esc(row?.pieces_per_bag || '')}"></div>
-          <div class="field"><label>الكمية السليمة (سليم)</label><input id="f-salem" inputmode="numeric" value="${esc(row?.qty_salem || '')}"></div>
-          <div class="field"><label>الكمية التالفة (تالف)</label><input id="f-talef" inputmode="numeric" value="${esc(row?.qty_talef || '')}"></div>
-          <div class="field"><label>الكمية المحرزة (محرز)</label><input id="f-muharraz" inputmode="numeric" value="${esc(row?.qty_muharraz || '')}"></div>
+          <div class="field"><label>الكمية السليمة (سليم)</label><input id="f-salem" inputmode="numeric" value="${esc(row?.qty_salem || '')}" ${locked ? 'disabled' : ''}></div>
+          <div class="field"><label>الكمية التالفة (تالف)</label><input id="f-talef" inputmode="numeric" value="${esc(row?.qty_talef || '')}" ${locked ? 'disabled' : ''}></div>
+          <div class="field"><label>الكمية المحرزة (محرز)</label><input id="f-muharraz" inputmode="numeric" value="${esc(row?.qty_muharraz || '')}" ${locked ? 'disabled' : ''}></div>
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(row?.notes || '')}"></div>
         </div>
+        ${locked ? '<p class="muted" style="margin:10px 0 0">هذا الصنف له حركات مخزون، لذلك تُحدَّث كميات سليم/تالف/محرز تلقائياً من الحركات ولا يمكن تعديلها يدوياً.</p>' : ''}
         <div id="conv" style="margin-top:10px;color:#2450c8;font-size:13px;line-height:1.8"></div>
       `, [
         {
@@ -216,6 +219,7 @@ register('items', {
         { label: 'إلغاء', onClick: (b) => b.remove() },
       ]);
       if (row) back.dataset.editId = String(row.id);
+      if (locked) back.dataset.lock = '1';
 
       const codeInput = back.querySelector('#f-code');
       codeInput.addEventListener('input', () => {

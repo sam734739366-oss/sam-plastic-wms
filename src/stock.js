@@ -1,6 +1,44 @@
 const { audit } = require('./audit');
 const { withTransaction } = require('./db');
 
+// حركات كميات سليم/تالف/محرز المخزنة مع كل صنف.
+// deltas: { salem: ±n, talef: ±n, muharraz: ±n } — ترفض النزول تحت الصفر برسالة واضحة.
+function bucketsDelta(db, itemId, deltas = {}) {
+  const row = db.prepare('SELECT code, name, qty_salem, qty_talef, qty_muharraz FROM items WHERE id=?').get(itemId);
+  if (!row) throw new Error('صنف غير موجود');
+  const d = {
+    salem: Number(deltas.salem) || 0,
+    talef: Number(deltas.talef) || 0,
+    muharraz: Number(deltas.muharraz) || 0,
+  };
+  const next = {
+    salem: (row.qty_salem || 0) + d.salem,
+    talef: (row.qty_talef || 0) + d.talef,
+    muharraz: (row.qty_muharraz || 0) + d.muharraz,
+  };
+  const label = (k) => ({ salem: 'السليمة', talef: 'التالفة', muharraz: 'المحرزة' }[k]);
+  for (const k of ['salem', 'talef', 'muharraz']) {
+    if (next[k] < 0) {
+      throw new Error(`الكمية ${label(k)} للصنف ${row.code} غير كافية (المتوفر ${row['qty_' + k] || 0})`);
+    }
+  }
+  db.prepare('UPDATE items SET qty_salem=?, qty_talef=?, qty_muharraz=? WHERE id=?')
+    .run(next.salem, next.talef, next.muharraz, itemId);
+  return next;
+}
+
+// تجميع دلتا سليم لأصناف مكررة في بنود مستند: +داخل أو -خارج
+function applySalemDelta(db, items, sign) {
+  const byItem = new Map();
+  for (const it of items) {
+    if (!it.item_id || !it.pieces) continue;
+    byItem.set(it.item_id, (byItem.get(it.item_id) || 0) + it.pieces);
+  }
+  for (const [itemId, pieces] of byItem) {
+    bucketsDelta(db, itemId, { salem: sign * pieces });
+  }
+}
+
 function writeMoves(db, docType, docId, docNumber, docDate, rows, userId) {
   withTransaction(db, () => {
     const old = db.prepare('SELECT * FROM stock_moves WHERE doc_type=? AND doc_id=?').all(docType, docId);
@@ -52,4 +90,4 @@ function getBalance(db, itemId, warehouseId) {
     FROM stock_moves WHERE item_id=? AND warehouse_id=?`).get(itemId, warehouseId);
 }
 
-module.exports = { writeMoves, voidDoc, getBalance };
+module.exports = { writeMoves, voidDoc, getBalance, bucketsDelta, applySalemDelta };

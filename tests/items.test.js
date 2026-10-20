@@ -98,6 +98,34 @@ test('items:save update keeps code and updates new fields', () => {
   assert.deepEqual(actions, ['create', 'update']);
 });
 
+test('items:list returns has_moves flag', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  const { id } = h['items:save'](null, { code: '110', name: 'علبة ماء', unit_name: 'علبة', qty_salem: 50 }, 1);
+  let rows = h['items:list']();
+  assert.equal(rows.find(r => r.id === id).has_moves, 0);
+  db.prepare('INSERT INTO warehouses (name) VALUES (?)').run('مخزن');
+  db.prepare(`INSERT INTO stock_moves (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id, qty_in_pieces)
+    VALUES ('receive', 1, 'R-1', '2026-10-18', ?, 1, 10)`).run(id);
+  rows = h['items:list']();
+  assert.equal(rows.find(r => r.id === id).has_moves, 1);
+});
+
+test('items:save update ignores qty fields when item has stock moves', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  const { id } = h['items:save'](null, { code: '111', name: 'علبة زيت', unit_name: 'علبة', qty_salem: 100, qty_talef: 5, qty_muharraz: 0 }, 1);
+  db.prepare('INSERT INTO warehouses (name) VALUES (?)').run('مخزن');
+  db.prepare(`INSERT INTO stock_moves (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id, qty_in_pieces)
+    VALUES ('receive', 1, 'R-1', '2026-10-18', ?, 1, 10)`).run(id);
+  h['items:save'](null, { id, code: '111', name: 'علبة زيت محسن', unit_name: 'علبة', qty_salem: 999, qty_talef: 999, qty_muharraz: 999 }, 1);
+  const row = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(row.name, 'علبة زيت محسن');
+  assert.equal(row.qty_salem, 100); // الأرصدة تُحفظ من الحركات فقط
+  assert.equal(row.qty_talef, 5);
+  assert.equal(row.qty_muharraz, 0);
+});
+
 test('items:list returns all items without group filtering', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();

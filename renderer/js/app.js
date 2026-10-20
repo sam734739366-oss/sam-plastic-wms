@@ -1,5 +1,6 @@
 import { currentUser } from './api.js';
 import { go } from './router.js';
+import { setCurrency } from './fmt.js';
 
 const u = currentUser();
 if (!u) location.href = 'index.html';
@@ -30,6 +31,11 @@ import './screens/audit.js';
 import './screens/users.js';
 import './screens/settings.js';
 import './screens/backup.js';
+
+try {
+  const settings = await window.api.invoke('settings:get');
+  setCurrency(settings.currency || 'YER');
+} catch { /* الإعدادات الافتراضية */ }
 
 go('dashboard');
 
