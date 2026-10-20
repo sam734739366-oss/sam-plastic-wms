@@ -2,14 +2,7 @@ import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
 import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
 
-const GROUP_NAMES = { 1: 'مواد أولية', 2: 'إنتاج تام', 3: 'خام للغير', 4: 'خدمات نفخ', 5: 'توالف' };
-const UNIT_OPTIONS = {
-  1: ['امبولة', 'حبة', 'كيس', 'كرتون', 'بالة'],
-  2: ['علبة', 'حبة'],
-  3: ['امبولة', 'علبة'],
-  4: ['علبة'],
-  5: ['علبة', 'حبة'],
-};
+const UNITS = ['علبة', 'حبة', 'غطاء', 'كيس'];
 
 function num(v) {
   if (v === '' || v === null || v === undefined) return '';
@@ -21,87 +14,72 @@ function num(v) {
   return Number.isFinite(n) ? n : '';
 }
 
-function fmtNum(v) {
+function digitsOnly(v) {
+  return String(v || '')
+    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+    .replace(/[^0-9]/g, '');
+}
+
+function fmt(v) {
   const n = num(v);
-  return n === '' ? '' : String(n);
+  return n === '' ? '' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 function packCell(r) {
   const parts = [];
-  if (r.weight_grams) parts.push(`الوزن ${fmtNum(r.weight_grams)} جم`);
-  if (r.pieces_per_carton) parts.push(`الكرتون ${fmtNum(r.pieces_per_carton)}`);
-  if (r.pieces_per_bag) parts.push(`الكيس ${fmtNum(r.pieces_per_bag)}`);
-  if (r.service_price) parts.push(`الأجرة ${fmtNum(r.service_price)} ريال`);
-  return parts.join(' — ') || '';
+  if (r.pieces_per_carton) parts.push(`كرتون ${fmt(r.pieces_per_carton)}`);
+  if (r.pieces_per_shadda) parts.push(`شدة ${fmt(r.pieces_per_shadda)}`);
+  if (r.pieces_per_bag) parts.push(`كيس ${fmt(r.pieces_per_bag)}`);
+  return parts.join(' — ') || '—';
 }
 
-function typeCell(r) {
-  return r.is_recycled
-    ? '<span class="tag recycled">محرز</span>'
-    : '<span class="tag new">جديد</span>';
+function weightCell(r) {
+  return r.weight_grams ? `${fmt(r.weight_grams)} جم` : '—';
 }
 
-function showFields(back, g) {
-  g = Number(g);
-  const toggle = (id, on) => {
-    const f = back.querySelector(`#${id}`);
-    if (f) f.style.display = on ? '' : 'none';
-  };
-  toggle('w-weight', g === 1 || g === 2 || g === 3);
-  toggle('w-carton', g === 1);
-  toggle('w-bag', g === 2);
-  toggle('w-price', g === 4);
-  toggle('w-recycled', g === 1);
-  toggle('w-bale', g === 1);
-  toggle('w-bale2', g === 1);
-  toggle('w-bale3', g === 1);
-
-  const sel = back.querySelector('#f-unit');
-  if (sel) {
-    const opts = UNIT_OPTIONS[g] || [];
-    const cur = sel.value;
-    sel.innerHTML = opts.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
-    if (opts.includes(cur)) sel.value = cur;
-  }
-  updateConv(back);
-}
-
-function updateConv(back) {
-  const conv = back.querySelector('#conv');
-  if (!conv) return;
-  const g = Number(back.querySelector('#f-group')?.value || 0);
-  const w = num(back.querySelector('#f-weight')?.value);
-  const lines = [];
-  if ((g === 1 || g === 2 || g === 3) && w) {
-    lines.push(`وزن 1000 حبة = <b>${(w * 1000 / 1000).toFixed(3)}</b> كجم`);
-    const carton = num(back.querySelector('#f-carton')?.value);
-    if (g === 1 && carton) lines.push(`وزن الكرتون (${fmtNum(carton)} حبة) ≈ <b>${(w * carton / 1000).toFixed(2)}</b> كجم`);
-    const bag = num(back.querySelector('#f-bag')?.value);
-    if (g === 2 && bag) lines.push(`وزن الكيس (${fmtNum(bag)} حبة) ≈ <b>${(w * bag / 1000).toFixed(2)}</b> كجم`);
-  }
-  conv.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+function qtyCell(r, key, cls, label) {
+  return `<span class="tag ${cls}">${label}: ${fmt(r[key])}</span>`;
 }
 
 function collect(back) {
   const v = (id) => back.querySelector(`#${id}`)?.value ?? '';
   return {
     id: back.dataset.editId ? Number(back.dataset.editId) : null,
-    code: v('f-code').trim(),
+    code: digitsOnly(v('f-code')),
     name: v('f-name').trim(),
-    item_group: Number(v('f-group')),
     unit_name: v('f-unit'),
     weight_grams: num(v('f-weight')) || null,
     pieces_per_carton: num(v('f-carton')) || null,
+    pieces_per_shadda: num(v('f-shadda')) || null,
     pieces_per_bag: num(v('f-bag')) || null,
-    service_price: num(v('f-price')) || null,
-    is_recycled: back.querySelector('#f-recycled')?.checked ? 1 : 0,
-    brand: v('f-brand').trim() || null,
-    size_label: v('f-size').trim() || null,
-    bale_size: v('f-bale-size').trim() || null,
-    bale_condition: v('f-bale-cond').trim() || null,
-    bale_mixed: back.querySelector('#f-mixed')?.checked ? 1 : 0,
+    qty_salem: num(v('f-salem')) || 0,
+    qty_talef: num(v('f-talef')) || 0,
+    qty_muharraz: num(v('f-muharraz')) || 0,
     notes: v('f-notes').trim() || null,
   };
+}
+
+function updateConv(back) {
+  const conv = back.querySelector('#conv');
+  if (!conv) return;
+  const w = num(back.querySelector('#f-weight')?.value);
+  const lines = [];
+  if (w) {
+    lines.push(`وزن 1000 وحدة = <b>${fmt(w)}</b> كجم`);
+    const carton = num(back.querySelector('#f-carton')?.value);
+    if (carton) lines.push(`وزن الكرتون (${fmt(carton)} قطعة) ≈ <b>${((w * carton) / 1000).toFixed(2)}</b> كجم`);
+    const shadda = num(back.querySelector('#f-shadda')?.value);
+    if (shadda) lines.push(`وزن الشدة (${fmt(shadda)} قطعة) ≈ <b>${((w * shadda) / 1000).toFixed(2)}</b> كجم`);
+    const bag = num(back.querySelector('#f-bag')?.value);
+    if (bag) lines.push(`وزن الكيس (${fmt(bag)} قطعة) ≈ <b>${((w * bag) / 1000).toFixed(2)}</b> كجم`);
+  }
+  const total = (num(back.querySelector('#f-salem')?.value) || 0)
+    + (num(back.querySelector('#f-talef')?.value) || 0)
+    + (num(back.querySelector('#f-muharraz')?.value) || 0);
+  const unit = back.querySelector('#f-unit')?.value || 'حبة';
+  lines.push(`إجمالي الكمية = <b>${fmt(total)}</b> ${esc(unit)}`);
+  conv.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
 }
 
 function parseCsv(text) {
@@ -110,18 +88,22 @@ function parseCsv(text) {
   for (const line of lines) {
     const cells = line.split(/[;,\t]/).map(c => (c || '').trim());
     if (!cells[0] || /^(كود|code)$/i.test(cells[0])) continue;
-    if (cells.length < 3) continue;
-    const [code, name, groupStr, unit, weight, carton, bag, price, recycled, brand, size, notes] = cells;
-    const group = Number(num(groupStr));
-    if (!(group >= 1 && group <= 5)) continue;
+    if (cells.length < 2) continue;
+    const [code, name, unit, weight, carton, shadda, bag, salem, talef, muharraz, notes] = cells;
+    const codeNorm = digitsOnly(code);
+    if (!codeNorm || !name) continue;
     rows.push({
-      code, name, item_group: group, unit_name: unit || 'حبة',
+      code: codeNorm,
+      name,
+      unit_name: UNITS.includes(unit) ? unit : 'حبة',
       weight_grams: num(weight) || null,
       pieces_per_carton: num(carton) || null,
+      pieces_per_shadda: num(shadda) || null,
       pieces_per_bag: num(bag) || null,
-      service_price: num(price) || null,
-      is_recycled: /^(1|نعم|محرز|true)$/i.test(recycled || '') ? 1 : 0,
-      brand: brand || null, size_label: size || null, notes: notes || null,
+      qty_salem: num(salem) || 0,
+      qty_talef: num(talef) || 0,
+      qty_muharraz: num(muharraz) || 0,
+      notes: notes || null,
     });
   }
   return rows;
@@ -130,45 +112,52 @@ function parseCsv(text) {
 register('items', {
   title: 'الأصناف',
   async mount(el) {
-    let currentGroup = 0;
+    let rows = [];
 
-    async function load() {
-      const rows = await api.invoke('items:list', currentGroup || null);
-      const pills = [
-        { g: 0, label: 'الكل' },
-        ...[1, 2, 3, 4, 5].map(g => ({ g, label: `${g} — ${GROUP_NAMES[g]}` })),
-      ];
-      el.innerHTML = `
-        <div class="filters">${pills.map(p => `<button class="pill ${currentGroup === p.g ? 'active' : ''}" data-g="${p.g}">${esc(p.label)}</button>`).join('')}</div>
-        <div class="toolbar">
-          <button class="btn primary" id="btn-add">+ إضافة صنف</button>
-          <button class="btn" id="btn-import">استيراد من ملف</button>
-        </div>
-        <div id="table-wrap"></div>`;
+    el.innerHTML = `
+      <div class="toolbar">
+        <button class="btn primary" id="btn-add">+ إضافة صنف</button>
+        <button class="btn" id="btn-import">استيراد من ملف</button>
+        <span class="spacer"></span>
+        <input id="f-search" placeholder="بحث بالكود أو الاسم…" style="width:230px">
+      </div>
+      <div id="summary" class="summary-line"></div>
+      <div id="table-wrap"></div>`;
 
-      el.querySelectorAll('.pill').forEach(p => {
-        p.onclick = () => { currentGroup = Number(p.dataset.g); load(); };
-      });
-      el.querySelector('#btn-add').onclick = () => edit(null);
-      el.querySelector('#btn-import').onclick = importModal;
+    el.querySelector('#btn-add').onclick = () => edit(null, () => refresh());
+    el.querySelector('#btn-import').onclick = () => importModal(() => refresh());
+    el.querySelector('#f-search').addEventListener('input', renderTableData);
+
+    function renderTableData() {
+      const q = (el.querySelector('#f-search')?.value || '').trim();
+      const filtered = q
+        ? rows.filter(r => String(r.code).includes(q) || (r.name || '').includes(q))
+        : rows;
+      const s = filtered.reduce((a, r) => a + (Number(r.qty_salem) || 0), 0);
+      const t = filtered.reduce((a, r) => a + (Number(r.qty_talef) || 0), 0);
+      const m = filtered.reduce((a, r) => a + (Number(r.qty_muharraz) || 0), 0);
+      el.querySelector('#summary').innerHTML =
+        `عدد الأصناف: <b>${filtered.length}</b> — الكمية السليمة: <b>${fmt(s)}</b> — التالفة: <b>${fmt(t)}</b> — المحرزة: <b>${fmt(m)}</b>`;
 
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'code', label: 'الكود' },
         { key: 'name', label: 'الاسم' },
-        { key: 'item_group', label: 'المجموعة', render: r => GROUP_NAMES[r.item_group] || r.item_group },
         { key: 'unit_name', label: 'الوحدة' },
-        { key: 'pack', label: 'العبوة / الوزن', render: packCell },
-        { key: 'type', label: 'النوع', render: typeCell },
+        { key: 'weight', label: 'وزن الوحدة', render: weightCell },
+        { key: 'pack', label: 'التعبئة', render: packCell },
+        { key: 'salem', label: 'سليم', render: r => qtyCell(r, 'qty_salem', 'salem', 'سليم') },
+        { key: 'talef', label: 'تالف', render: r => qtyCell(r, 'qty_talef', 'talef', 'تالف') },
+        { key: 'muharraz', label: 'محرز', render: r => qtyCell(r, 'qty_muharraz', 'muharraz', 'محرز') },
         { key: 'notes', label: 'ملاحظات' },
         {
           key: 'actions', label: '',
           render: (r) => `<button class="btn mini" data-edit="${r.id}">تعديل</button>
             <button class="btn mini danger" data-del="${r.id}">حذف</button>`,
         },
-      ], rows);
+      ], filtered);
 
       el.querySelectorAll('[data-edit]').forEach(b => {
-        b.onclick = () => edit(rows.find(r => r.id === Number(b.dataset.edit)));
+        b.onclick = () => edit(rows.find(r => r.id === Number(b.dataset.edit)), () => refresh());
       });
       el.querySelectorAll('[data-del]').forEach(b => {
         b.onclick = async () => {
@@ -178,7 +167,7 @@ register('items', {
             try {
               await api.invoke('items:delete', r.id, currentUser().id);
               toast('تم حذف الصنف', 'ok');
-              await load();
+              await refresh();
             } catch (err) {
               toast(String(err.message || err), 'err');
             }
@@ -187,25 +176,26 @@ register('items', {
       });
     }
 
-    function edit(row) {
+    async function refresh() {
+      rows = await api.invoke('items:list');
+      renderTableData();
+    }
+
+    function edit(row, onSaved) {
       const back = openModal(row ? 'تعديل صنف' : 'إضافة صنف', `
         <div class="form-grid">
-          <div class="field"><label>كود الصنف *</label><input id="f-code" value="${esc(row?.code || '')}" placeholder="مثال: 001-020"></div>
+          <div class="field"><label>كود الصنف * (أرقام فقط)</label><input id="f-code" inputmode="numeric" value="${esc(row?.code || '')}" placeholder="مثال: 101"></div>
           <div class="field"><label>اسم الصنف *</label><input id="f-name" value="${esc(row?.name || '')}"></div>
-          <div class="field"><label>المجموعة</label>
-            <select id="f-group">${[1, 2, 3, 4, 5].map(g => `<option value="${g}" ${row?.item_group === g ? 'selected' : ''}>${g} — ${GROUP_NAMES[g]}</option>`).join('')}</select>
+          <div class="field"><label>الوحدة *</label>
+            <select id="f-unit">${UNITS.map(u => `<option value="${esc(u)}" ${row?.unit_name === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>
           </div>
-          <div class="field"><label>الوحدة</label><select id="f-unit"></select></div>
-          <div class="field" id="w-weight"><label>وزن الحبة (جرام)</label><input id="f-weight" value="${esc(row?.weight_grams || '')}"></div>
-          <div class="field" id="w-carton"><label>عدد الحبات في الكرتون</label><input id="f-carton" value="${esc(row?.pieces_per_carton || '')}"></div>
-          <div class="field" id="w-bag"><label>عدد الحبات في الكيس</label><input id="f-bag" value="${esc(row?.pieces_per_bag || '')}"></div>
-          <div class="field" id="w-price"><label>سعر أجرة النفخ (ريال)</label><input id="f-price" value="${esc(row?.service_price || '')}"></div>
-          <div class="field" id="w-recycled"><label>محرز؟</label><label class="check"><input type="checkbox" id="f-recycled" ${row?.is_recycled ? 'checked' : ''}> صنف محرز (مُعاد)</label></div>
-          <div class="field" id="w-bale"><label>حجم البالة</label><input id="f-bale-size" value="${esc(row?.bale_size || '')}"></div>
-          <div class="field" id="w-bale2"><label>حالة البالة</label><input id="f-bale-cond" value="${esc(row?.bale_condition || '')}"></div>
-          <div class="field" id="w-bale3"><label>بالة مخلطة؟</label><label class="check"><input type="checkbox" id="f-mixed" ${row?.bale_mixed ? 'checked' : ''}> مخلطة</label></div>
-          <div class="field"><label>العلامة التجارية</label><input id="f-brand" value="${esc(row?.brand || '')}"></div>
-          <div class="field"><label>المقاس</label><input id="f-size" value="${esc(row?.size_label || '')}"></div>
+          <div class="field"><label>وزن الوحدة (جرام)</label><input id="f-weight" inputmode="decimal" value="${esc(row?.weight_grams || '')}" placeholder="مثال: 5.02"></div>
+          <div class="field"><label>عدد القطع في الكرتون (اختياري)</label><input id="f-carton" inputmode="numeric" value="${esc(row?.pieces_per_carton || '')}"></div>
+          <div class="field"><label>عدد القطع في الشدة (اختياري)</label><input id="f-shadda" inputmode="numeric" value="${esc(row?.pieces_per_shadda || '')}"></div>
+          <div class="field"><label>عدد القطع في الكيس (اختياري)</label><input id="f-bag" inputmode="numeric" value="${esc(row?.pieces_per_bag || '')}"></div>
+          <div class="field"><label>الكمية السليمة (سليم)</label><input id="f-salem" inputmode="numeric" value="${esc(row?.qty_salem || '')}"></div>
+          <div class="field"><label>الكمية التالفة (تالف)</label><input id="f-talef" inputmode="numeric" value="${esc(row?.qty_talef || '')}"></div>
+          <div class="field"><label>الكمية المحرزة (محرز)</label><input id="f-muharraz" inputmode="numeric" value="${esc(row?.qty_muharraz || '')}"></div>
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(row?.notes || '')}"></div>
         </div>
         <div id="conv" style="margin-top:10px;color:#2450c8;font-size:13px;line-height:1.8"></div>
@@ -217,7 +207,7 @@ register('items', {
               await api.invoke('items:save', collect(b), currentUser().id);
               toast('تم حفظ الصنف', 'ok');
               b.remove();
-              await load();
+              await onSaved();
             } catch (err) {
               toast(String(err.message || err), 'err');
             }
@@ -226,17 +216,25 @@ register('items', {
         { label: 'إلغاء', onClick: (b) => b.remove() },
       ]);
       if (row) back.dataset.editId = String(row.id);
-      back.querySelector('#f-group').addEventListener('change', () => showFields(back, back.querySelector('#f-group').value));
-      for (const id of ['f-weight', 'f-carton', 'f-bag', 'f-price']) {
+
+      const codeInput = back.querySelector('#f-code');
+      codeInput.addEventListener('input', () => {
+        const before = codeInput.value;
+        const after = digitsOnly(before);
+        if (after !== before) codeInput.value = after;
+      });
+
+      back.querySelector('#f-unit').addEventListener('change', () => updateConv(back));
+      for (const id of ['f-weight', 'f-carton', 'f-shadda', 'f-bag', 'f-salem', 'f-talef', 'f-muharraz']) {
         back.querySelector(`#${id}`)?.addEventListener('input', () => updateConv(back));
       }
-      showFields(back, row?.item_group || 1);
+      updateConv(back);
     }
 
-    function importModal() {
+    function importModal(onDone) {
       const back = openModal('استيراد الأصناف من ملف', `
         <p style="line-height:1.8">اختر ملف CSV أو الصق البيانات (كل سطر صنف):<br>
-        <small style="color:#64748b">كود ; اسم ; مجموعة ; وحدة ; وزن ; كرتون ; كيس ; سعر ; محرز ; علامة ; مقاس ; ملاحظات</small></p>
+        <small style="color:#64748b">كود ; اسم ; وحدة ; وزن ; كرتون ; شدة ; كيس ; سليم ; تالف ; محرز ; ملاحظات</small></p>
         <div class="field"><input type="file" id="imp-file" accept=".csv,.txt"></div>
         <div class="field"><label>أو الصق البيانات هنا</label><textarea id="imp-text" rows="6" style="font-family:monospace;font-size:12px"></textarea></div>
         <div id="imp-result" style="margin-top:8px;color:#2450c8;font-weight:bold"></div>
@@ -247,12 +245,12 @@ register('items', {
             try {
               const text = b.querySelector('#imp-text').value.trim();
               if (!text) { toast('لا توجد بيانات للاستيراد', 'err'); return; }
-              const rows = parseCsv(text);
-              if (!rows.length) { toast('لم يتم التعرف على أي صف صالح', 'err'); return; }
-              const res = await api.invoke('items:import', rows, currentUser().id);
-              b.querySelector('#imp-result').textContent = `تم استيراد ${res.imported} صنف (تجاهل المكرر: ${rows.length - res.imported})`;
+              const parsed = parseCsv(text);
+              if (!parsed.length) { toast('لم يتم التعرف على أي صف صالح', 'err'); return; }
+              const res = await api.invoke('items:import', parsed, currentUser().id);
+              b.querySelector('#imp-result').textContent = `تم استيراد ${res.imported} صنف (تجاهل المكرر وغير الصالح: ${parsed.length - res.imported})`;
               toast(`تم استيراد ${res.imported} صنف`, 'ok');
-              await load();
+              await onDone();
             } catch (err) {
               toast(String(err.message || err), 'err');
             }
@@ -269,6 +267,6 @@ register('items', {
       });
     }
 
-    await load();
+    await refresh();
   }
 });

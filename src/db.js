@@ -15,6 +15,16 @@ function dataDir() {
 
 function setDb(d) { db = d; }
 
+function migrate(d) {
+  // إضافة أعمدة نظام الأصناف الجديد لقواعد البيانات القديمة دون فقدان بياناتها
+  const cols = d.prepare('PRAGMA table_info(items)').all().map(c => c.name);
+  const add = (name, sql) => { if (!cols.includes(name)) d.exec(`ALTER TABLE items ADD COLUMN ${sql}`); };
+  add('pieces_per_shadda', 'pieces_per_shadda INTEGER');
+  add('qty_salem', 'qty_salem INTEGER NOT NULL DEFAULT 0');
+  add('qty_talef', 'qty_talef INTEGER NOT NULL DEFAULT 0');
+  add('qty_muharraz', 'qty_muharraz INTEGER NOT NULL DEFAULT 0');
+}
+
 function getDb() {
   if (db) return db;
   const dir = dataDir();
@@ -24,6 +34,7 @@ function getDb() {
   db.exec('PRAGMA foreign_keys = ON');
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
+  migrate(db);
   seed(db);
   return db;
 }
