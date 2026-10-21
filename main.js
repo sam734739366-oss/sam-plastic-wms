@@ -23,6 +23,7 @@ const KIND_TEMPLATE = {
   toll_delivery: templates.tollDeliveryTemplate,
   scrap: templates.scrapTemplate,
   transfer: templates.transferTemplate,
+  production: templates.productionTemplate,
 };
 
 ipcMain.handle('print:open', (e, payload) => {

@@ -29,13 +29,22 @@ register('receives', {
         {
           key: 'actions', label: '',
           render: (r) => `<button class="btn mini" data-view="${r.id}">عرض</button>
+            <button class="btn mini" data-print="${r.id}">طباعة</button>
             <button class="btn mini" data-edit="${r.id}">تعديل</button>
             <button class="btn mini danger" data-void="${r.id}">إلغاء</button>`,
         },
       ], rows);
       el.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view(Number(b.dataset.view)));
+      el.querySelectorAll('[data-print]').forEach(b => b.onclick = () => printDoc(Number(b.dataset.print)));
       el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => edit(Number(b.dataset.edit)));
       el.querySelectorAll('[data-void]').forEach(b => b.onclick = () => voidDoc(Number(b.dataset.void)));
+    }
+
+    async function printDoc(id) {
+      try {
+        const doc = await api.invoke('receives:get', id);
+        await api.invoke('print:open', { kind: 'receive', doc, settings: await api.invoke('settings:get') });
+      } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
     async function view(id) {
@@ -114,14 +123,20 @@ register('receives', {
           <div class="field"><label>اسم المستلم</label><input id="f-receiver" value="${esc(doc ? doc.receiver_name || '' : '')}"></div>
           <div class="field"><label>ملاحظات</label><input id="f-notes" value="${esc(doc ? doc.notes || '' : '')}"></div>
         </div>
-        <div class="prows-head">
-          <span>الصنف</span><span>المخزن</span><span>الكمية</span><span>الوحدة</span><span>التحويل الفوري</span><span>ملاحظات</span><span></span>
-        </div>
-        <div id="irows"></div>
+        <table class="doc-lines">
+          <thead><tr>
+            <th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الوحدة</th><th>الحبات / الوزن</th><th>ملاحظات</th><th></th>
+          </tr></thead>
+          <tbody id="irows"></tbody>
+          <tfoot><tr>
+            <td colspan="4"><b>إجمالي الحبات المستلمة</b></td>
+            <td id="f-total">0</td><td colspan="2"></td>
+          </tr></tfoot>
+        </table>
         <button class="btn small" id="add-row" type="button">+ إضافة بند</button>`,
         [{ label: 'حفظ', class: 'primary', onClick: async (b) => {
           try {
-            const itemsData = [...b.querySelectorAll('.irow')].map(r => ({
+            const itemsData = [...b.querySelectorAll('#irows .irow')].map(r => ({
               item_id: Number(r.querySelector('.p-item').value),
               warehouse_id: Number(r.querySelector('.p-wh').value),
               quantity: parseFloat(r.querySelector('.p-qty').value) || 0,
@@ -143,9 +158,9 @@ register('receives', {
             b.remove(); toast('تم الحفظ', 'ok'); await load();
           } catch (e) { toast(String(e.message || e), 'err'); }
         } }, { label: 'إلغاء', onClick: (b) => b.remove() }]);
-      back.querySelector('.modal').style.minWidth = '900px';
 
       const rowsWrap = back.querySelector('#irows');
+      const totalEl = back.querySelector('#f-total');
       const itemById = (id) => items.find(i => i.id === id);
       const isCustomer = () => back.querySelector('#f-source').value === 'customer';
       const applySource = () => {
@@ -153,24 +168,33 @@ register('receives', {
       };
       back.querySelector('#f-source').onchange = applySource;
 
+      function updateTotal() {
+        let total = 0;
+        for (const r of rowsWrap.querySelectorAll('.irow')) {
+          const item = itemById(Number(r.querySelector('.p-item').value));
+          total += toPieces(r.querySelector('.p-qty').value, r.querySelector('.p-unit').value, item) || 0;
+        }
+        totalEl.textContent = fmtNum(total, 0) + ' حبة';
+      }
+
       function addRow(data = {}) {
-        const row = document.createElement('div');
+        const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
-          <select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select>
-          <input class="p-qty" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}">
-          <select class="p-unit"></select>
-          <div class="p-bal"><span class="bal-text muted"></span></div>
-          <input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}">
-          <button class="btn mini danger p-del" type="button">×</button>`;
+          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
+          <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
+          <td><select class="p-unit"></select></td>
+          <td><span class="p-calc muted"></span></td>
+          <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
+          <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
-        row.querySelector('.p-del').onclick = () => row.remove();
+        row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
 
         const itemSel = row.querySelector('.p-item');
         const unitSel = row.querySelector('.p-unit');
         const qty = row.querySelector('.p-qty');
-        const balText = row.querySelector('.bal-text');
+        const calc = row.querySelector('.p-calc');
 
         function refreshUnits() {
           const item = itemById(Number(itemSel.value));
@@ -187,10 +211,11 @@ register('receives', {
           const pieces = toPieces(qty.value, unitSel.value, item);
           if (pieces != null && pieces > 0) {
             const kg = piecesToWeightKg(pieces, item.weight_grams);
-            balText.textContent = `${fmtNum(pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`;
+            calc.textContent = `${fmtNum(pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`;
           } else {
-            balText.textContent = '';
+            calc.textContent = '—';
           }
+          updateTotal();
         }
 
         itemSel.onchange = refresh;

@@ -10,11 +10,33 @@ register('warehouses', {
     el.innerHTML = `
       <div class="toolbar">
         <button class="btn primary" id="btn-add">+ إضافة مخزن</button>
+        <span class="spacer"></span>
+        <button class="btn" id="btn-print">طباعة القائمة</button>
+      </div>
+      <div id="help" class="summary-line" style="line-height:2">
+        <b>كيف تعمل المخازن؟</b> البرنامج يعمل بمخزن واحد افتراضي «المخزن الرئيسي» تُسجَّل فيه كل الكميات
+        (المشتريات، الإنتاج، الأرصدة الافتتاحية) وتخرج منه (الصرف، البيع، الخروج).
+        أضف مخازن إضافية فقط إذا أردت فصل مواقع تخزين حقيقية، ثم استخدم «نقل بين المخازن» لتحريك الكميات بينها.
+        حذف المخزن غير ممكن إلا إذا لم تكن له أي حركات.
       </div>
       <div id="summary" class="summary-line"></div>
       <div id="table-wrap"></div>`;
 
     el.querySelector('#btn-add').onclick = () => edit(null, refresh);
+    el.querySelector('#btn-print').onclick = async () => {
+      try {
+        const settings = await api.invoke('settings:get');
+        await api.invoke('print:open', {
+          kind: 'report',
+          title: 'قائمة المخازن',
+          metaLines: ['عدد المخازن: ' + rows.length, 'تاريخ الطباعة: ' + new Date().toLocaleString('ar')],
+          headers: ['الاسم', 'الموقع', 'ملاحظات'],
+          rows: rows.map(r => [esc(r.name), esc(r.location || '—'), esc(r.notes || '—')]),
+          foot: '',
+          settings,
+        });
+      } catch (e) { toast(String(e.message || e), 'err'); }
+    };
 
     function renderTableData() {
       el.querySelector('#summary').innerHTML =

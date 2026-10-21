@@ -137,6 +137,22 @@ function transferTemplate(doc, settings) {
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
+function productionTemplate(doc, settings) {
+  const total = (doc.good_pieces || 0) + (doc.defect_before || 0) + (doc.defect_after || 0);
+  const rest = (doc.pieces || 0) - total;
+  const rows = [
+    [num(doc.pieces || 0), num(doc.good_pieces || 0), num(doc.defect_before || 0), num(doc.defect_after || 0),
+      rest > 0 ? num(rest) : '—'],
+  ];
+  return docShell([settings.factory_name || 'سام بلاستيك', 'نتيجة إنتاج كرتون'],
+    `<div class="meta">
+      <b>الكرتون:</b> ${esc(doc.carton_number)} &nbsp; <b>التاريخ:</b> ${esc(doc.result_date)}
+      ${doc.item_code ? ` &nbsp; <b>الصنف:</b> ${esc(doc.item_code)} — ${esc(doc.item_name)}` : ''}
+      ${doc.issue_number ? `<br><b>تصريح الصرف:</b> ${esc(doc.issue_number)}` : ''}</div>`
+    + tableHtml(['حبات الكرتون', 'سليم', 'تالف قبل النفخ', 'تالف بعد النفخ', 'غير محسوب'], rows)
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+}
+
 function reportTemplate(settings, title, metaLines, headers, rows, foot = '') {
   return docShell([settings.factory_name || 'سام بلاستيك', title],
     `<div class="meta">${metaLines.map(esc).join(' &nbsp; ')}</div>${tableHtml(headers, rows)}${foot}`,
@@ -145,5 +161,5 @@ function reportTemplate(settings, title, metaLines, headers, rows, foot = '') {
 
 module.exports = {
   purchaseTemplate, issueTemplate, receiveTemplate, invoiceTemplate, exitTemplate,
-  tollReceiptTemplate, tollDeliveryTemplate, scrapTemplate, transferTemplate, reportTemplate,
+  tollReceiptTemplate, tollDeliveryTemplate, scrapTemplate, transferTemplate, productionTemplate, reportTemplate,
 };

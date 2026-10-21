@@ -4,11 +4,19 @@ const UNITS = ['علبة', 'حبة', 'غطاء', 'كيس', 'كرتون', 'امب
 function unitOptionsFor(item) {
   if (!item) return [{ value: 'حبة', label: 'حبة' }];
   const opts = [{ value: item.unit_name || 'حبة', label: item.unit_name || 'حبة' }];
+  // عند صنف وحدته الأساسية عبوة تجميع (كرتون/كيس) تظل «حبة» متاحة كوحدة القطعة الواحدة
+  if (!['حبة', 'علبة', 'غطاء', 'امبول'].includes(item.unit_name) && item.unit_name !== 'حبة') {
+    opts.push({ value: 'حبة', label: 'حبة (قطعة واحدة)' });
+  }
   if (item.pieces_per_carton && item.unit_name !== 'كرتون') {
     opts.push({ value: 'كرتون', label: `كرتون (${item.pieces_per_carton})` });
   }
-  if (item.pieces_per_shadda) opts.push({ value: 'شدة', label: `شدة (${item.pieces_per_shadda})` });
-  if (item.pieces_per_bag && item.unit_name !== 'كيس') opts.push({ value: 'كيس', label: `كيس (${item.pieces_per_bag})` });
+  if (item.pieces_per_shadda && item.unit_name !== 'شدة') {
+    opts.push({ value: 'شدة', label: `شدة (${item.pieces_per_shadda})` });
+  }
+  if (item.pieces_per_bag && item.unit_name !== 'كيس') {
+    opts.push({ value: 'كيس', label: `كيس (${item.pieces_per_bag})` });
+  }
   if (item.weight_grams) opts.push({ value: 'كجم', label: 'كجم' }, { value: 'طن', label: 'طن' });
   return opts;
 }

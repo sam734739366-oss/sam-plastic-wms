@@ -11,10 +11,31 @@ function normalizeCode(v) {
   return String(v || '').trim().replace(/[٠-٩۰-۹]/g, (d) => AR_DIGITS[d] || d);
 }
 
+// مزامنة الرصيد الافتتاحي: تُحذف حركات الافتتاح القديمة للصنف وتُكتب حركة واحدة
+// تعادل مجموع (سليم+تالف+محرز) في أول مخزن، فتظهر الكميات في الجرد والتقارير
+// وتصبح قابلة للصرف والبيع. تُستدعى عند إنشاء الصنف وتعديل أرصدته الافتتاحية.
+function syncOpeningMoves(db, itemId, userId) {
+  const item = db.prepare('SELECT * FROM items WHERE id=?').get(itemId);
+  if (!item) return;
+  const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get();
+  if (!wh) return;
+  db.prepare("DELETE FROM stock_moves WHERE doc_type='opening' AND doc_id=?").run(itemId);
+  const total = (Number(item.qty_salem) || 0) + (Number(item.qty_talef) || 0) + (Number(item.qty_muharraz) || 0);
+  if (total > 0) {
+    db.prepare(`INSERT INTO stock_moves
+      (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+       qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, notes)
+      VALUES ('opening',?,?,?,?,?,?,0,?,0,?)`)
+      .run(itemId, `افتتاحي-${item.code}`, new Date().toISOString().slice(0, 10), itemId, wh.id,
+        total, total * (Number(item.weight_grams) || 0) / 1000, 'رصيد افتتاحي (سليم/تالف/محرز)');
+  }
+  audit(db, userId, 'stock_write', 'opening', itemId, null, { pieces: total });
+}
+
 module.exports = function register(ipcMain) {
   ipcMain.handle('items:list', () => {
     return getDb().prepare(`SELECT i.*,
-        EXISTS(SELECT 1 FROM stock_moves m WHERE m.item_id = i.id) has_moves
+        EXISTS(SELECT 1 FROM stock_moves m WHERE m.item_id = i.id AND m.doc_type != 'opening') has_moves
       FROM items i ORDER BY i.code`).all();
   });
 
@@ -34,7 +55,7 @@ module.exports = function register(ipcMain) {
     const before = isNew ? null : db.prepare('SELECT * FROM items WHERE id=?').get(row.id);
     // كميات سليم/تالف/محرز تُحرَّك تلقائياً من المستندات؛ تُقبل كأرصدة افتتاحية فقط
     // لصنف جديد أو صنف لم تتحرك له حركات مخزون بعد.
-    const hasMoves = !isNew && db.prepare('SELECT COUNT(*) c FROM stock_moves WHERE item_id=?').get(row.id).c > 0;
+    const hasMoves = !isNew && db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE item_id=? AND doc_type != 'opening'").get(row.id).c > 0;
     let id = row.id;
     const fields = {
       code, name, unit_name: unit,
@@ -70,16 +91,19 @@ module.exports = function register(ipcMain) {
         @qty_salem,@qty_talef,@qty_muharraz,@notes)`)
         .run(fields).lastInsertRowid;
     }
+    // الأرصدة الافتتاحية تنعكس كحركة مخزون حتى تظهر في الجرد والتقارير وتصبح قابلة للصرف والبيع
+    if (isNew || !hasMoves) syncOpeningMoves(db, id, userId);
     audit(db, userId, isNew ? 'create' : 'update', 'item', id, before, fields);
     return { id };
   });
 
   ipcMain.handle('items:delete', (e, id, userId) => {
     const db = getDb();
-    const used = db.prepare('SELECT COUNT(*) c FROM stock_moves WHERE item_id=?').get(id).c;
+    const used = db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE item_id=? AND doc_type != 'opening'").get(id).c;
     if (used > 0) throw new Error('لا يمكن حذف صنف له حركات مخزون');
     const before = db.prepare('SELECT * FROM items WHERE id=?').get(id);
     if (!before) throw new Error('الصنف غير موجود');
+    db.prepare("DELETE FROM stock_moves WHERE item_id=? AND doc_type='opening'").run(id);
     db.prepare('DELETE FROM items WHERE id=?').run(id);
     audit(db, userId, 'delete', 'item', id, before, null);
     return { ok: true };
@@ -88,6 +112,7 @@ module.exports = function register(ipcMain) {
   ipcMain.handle('items:import', (e, rows, userId) => {
     const db = getDb();
     let count = 0;
+    const inserted = [];
     withTransaction(db, () => {
       const ins = db.prepare(`INSERT OR IGNORE INTO items (code,name,item_group,unit_name,weight_grams,
         pieces_per_carton,pieces_per_shadda,pieces_per_bag,qty_salem,qty_talef,qty_muharraz,notes)
@@ -100,9 +125,12 @@ module.exports = function register(ipcMain) {
           r.pieces_per_carton || null, r.pieces_per_shadda || null, r.pieces_per_bag || null,
           Number(r.qty_salem) || 0, Number(r.qty_talef) || 0, Number(r.qty_muharraz) || 0,
           r.notes || null);
+        if (res.changes > 0) inserted.push(res.lastInsertRowid);
         count += res.changes;
       }
     });
+    // أرصدة افتتاحية للمستورد الجديد
+    for (const id of inserted) syncOpeningMoves(db, id, userId);
     audit(db, userId, 'import', 'items', null, null, { imported: count });
     return { imported: count };
   });

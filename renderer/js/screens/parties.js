@@ -16,6 +16,7 @@ register('parties', {
       <div class="toolbar">
         <button class="btn primary" id="btn-add">+ إضافة طرف</button>
         <span class="spacer"></span>
+        <button class="btn" id="btn-print">طباعة القائمة</button>
         <input id="f-search" placeholder="بحث بالاسم أو الهاتف…" style="width:230px">
       </div>
       <div id="summary" class="summary-line"></div>
@@ -38,6 +39,24 @@ register('parties', {
     });
     el.querySelector('#btn-add').onclick = () => edit(null, refresh);
     el.querySelector('#f-search').addEventListener('input', renderTableData);
+    el.querySelector('#btn-print').onclick = async () => {
+      const q = (el.querySelector('#f-search')?.value || '').trim();
+      const filtered = q
+        ? rows.filter(r => (r.name || '').includes(q) || (r.phone || '').includes(q))
+        : rows;
+      try {
+        const settings = await api.invoke('settings:get');
+        await api.invoke('print:open', {
+          kind: 'report',
+          title: 'قائمة الموردين والعملاء',
+          metaLines: ['عدد الأطراف: ' + filtered.length, 'تاريخ الطباعة: ' + new Date().toLocaleString('ar')],
+          headers: ['الاسم', 'النوع', 'الهاتف', 'العنوان', 'ملاحظات'],
+          rows: filtered.map(r => [esc(r.name), esc(TYPE_NAMES[r.type] || r.type), r.phone ? esc(r.phone) : '—', esc(r.address || '—'), esc(r.notes || '—')]),
+          foot: '',
+          settings,
+        });
+      } catch (e) { toast(String(e.message || e), 'err'); }
+    };
 
     function renderTableData() {
       const q = (el.querySelector('#f-search')?.value || '').trim();

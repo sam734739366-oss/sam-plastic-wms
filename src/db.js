@@ -34,6 +34,30 @@ function migrate(d) {
   if (cur && !['YER', 'SAR', 'USD'].includes(cur.value)) {
     d.prepare("UPDATE settings SET value='YER' WHERE key='currency'").run();
   }
+  // أرصدة افتتاحية: كميات سليم/تالف/محرز المحفوظة في جدول الأصناف (من إصدارات سابقة)
+  // تُحوَّل إلى حركات مخزون افتتاحية حتى تظهر في الجرد والتقارير وتصبح قابلة للصرف والبيع.
+  // العملية تراكمية وآمنة: تُنشئ الفرق فقط إن كان المجموع أكبر من صافي الحركات القائمة.
+  const wh = d.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get();
+  if (wh) {
+    const items = d.prepare('SELECT * FROM items').all();
+    const balRows = d.prepare(`SELECT item_id,
+        COALESCE(SUM(qty_in_pieces),0) - COALESCE(SUM(qty_out_pieces),0) bal
+      FROM stock_moves GROUP BY item_id`).all();
+    const balByItem = new Map(balRows.map(r => [r.item_id, r.bal]));
+    const insOpen = d.prepare(`INSERT INTO stock_moves
+      (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+       qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, notes)
+      VALUES ('opening',?,?,?,?,?,?,0,?,0,?)`);
+    const today = new Date().toISOString().slice(0, 10);
+    for (const it of items) {
+      const total = (Number(it.qty_salem) || 0) + (Number(it.qty_talef) || 0) + (Number(it.qty_muharraz) || 0);
+      const diff = total - (balByItem.get(it.id) || 0);
+      if (diff > 0) {
+        insOpen.run(it.id, `افتتاحي-${it.code}`, today, it.id, wh.id, diff,
+          diff * (Number(it.weight_grams) || 0) / 1000, 'رصيد افتتاحي (سليم/تالف/محرز)');
+      }
+    }
+  }
 }
 
 function getDb() {
@@ -69,10 +93,11 @@ function seed(d) {
     d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES (?,?,?,?)")
       .run('admin', 'المدير', bcrypt.hashSync('admin123', 10), 'manager');
   }
-  const insertWarehouse = d.prepare('INSERT OR IGNORE INTO warehouses (name, location) VALUES (?,?)');
-  insertWarehouse.run('مخزن المواد الخام', 'داخل المصنع');
-  insertWarehouse.run('مخزن الإنتاج التام', 'داخل المصنع');
-  insertWarehouse.run('مخزن المحرز والتالف', 'داخل المصنع');
+  // مخزن واحد افتراضي في بداية التشغيل؛ يمكن إضافة مخازن أخرى من شاشة المخازن عند الحاجة.
+  const whCount = d.prepare('SELECT COUNT(*) c FROM warehouses').get().c;
+  if (whCount === 0) {
+    d.prepare('INSERT INTO warehouses (name, location) VALUES (?,?)').run('المخزن الرئيسي', 'داخل المصنع');
+  }
   const insertShift = d.prepare('INSERT OR IGNORE INTO shifts (name) VALUES (?)');
   insertShift.run('صباحية');
   insertShift.run('مسائية');

@@ -12,9 +12,31 @@ register('stock', {
         <select id="f-warehouse"><option value="">كل المخازن</option>
           ${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select>
         <button class="btn primary" id="btn-run">عرض الجرد</button>
+        <span class="spacer"></span>
+        <button class="btn" id="btn-print">طباعة الجرد</button>
       </div>
       <div class="summary-line" id="summary"></div>
       <div id="table-wrap"></div>`;
+
+    let lastRows = [];
+    let lastWhName = 'كل المخازن';
+    el.querySelector('#btn-print').onclick = async () => {
+      try {
+        const settings = await api.invoke('settings:get');
+        const totalPieces = lastRows.reduce((s, r) => s + (Number(r.balance_pieces) || 0), 0);
+        const totalKg = lastRows.reduce((s, r) => s + (Number(r.balance_kg) || 0), 0);
+        await api.invoke('print:open', {
+          kind: 'report',
+          title: 'جرد المخزون',
+          metaLines: ['المخزن: ' + lastWhName, 'عدد الأصناف: ' + lastRows.length, 'تاريخ الطباعة: ' + new Date().toLocaleString('ar')],
+          headers: ['الكود', 'الصنف', 'الوحدة', 'الرصيد المخزني', 'سليم', 'تالف', 'محرز', 'الوزن كجم'],
+          rows: lastRows.map(r => [esc(r.code), esc(r.name), esc(r.unit_name), esc(r.balance_label),
+            fmtNum(r.qty_salem, 0), fmtNum(r.qty_talef, 0), fmtNum(r.qty_muharraz, 0), fmtNum(r.balance_kg)]),
+          foot: `<div class="notes"><b>إجمالي الحبات: ${fmtNum(totalPieces, 0)} — إجمالي الوزن: ${fmtNum(totalKg)} كجم</b></div>`,
+          settings,
+        });
+      } catch (e) { toast(String(e.message || e), 'err'); }
+    };
 
     async function load() {
       try {
@@ -22,6 +44,8 @@ register('stock', {
           warehouseId: Number(el.querySelector('#f-warehouse').value) || null,
         };
         const rows = await api.invoke('reports:inventory', filters);
+        lastRows = rows;
+        lastWhName = el.querySelector('#f-warehouse').selectedOptions[0]?.textContent || 'كل المخازن';
         const totalPieces = rows.reduce((s, r) => s + r.balance_pieces, 0);
         const totalKg = rows.reduce((s, r) => s + r.balance_kg, 0);
         el.querySelector('#summary').innerHTML =

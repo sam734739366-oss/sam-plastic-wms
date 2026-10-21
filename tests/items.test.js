@@ -162,3 +162,53 @@ test('items:import inserts valid rows and skips invalid or duplicate ones', () =
   assert.equal(imported.pieces_per_bag, 500);
   assert.equal(imported.qty_muharraz, 50);
 });
+
+test('items:save writes an opening stock move when a warehouse exists', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare('INSERT INTO warehouses (name, location) VALUES (?,?)').run('المخزن الرئيسي', 'داخل المصنع');
+  const h = stubIpc();
+  const { id } = h['items:save'](null, {
+    code: '301', name: 'علبة ماء', unit_name: 'علبة', weight_grams: 10,
+    qty_salem: 5000, qty_talef: 100, qty_muharraz: 50,
+  }, 1);
+  const m = db.prepare("SELECT * FROM stock_moves WHERE doc_type='opening' AND doc_id=?").get(id);
+  assert.ok(m, 'يجب إنشاء حركة افتتاحية');
+  assert.equal(m.qty_in_pieces, 5150);
+  assert.equal(m.weight_in_kg, 51.5);
+  assert.equal(m.warehouse_id, 1);
+  const listed = h['items:list']().find(r => r.id === id);
+  assert.equal(listed.has_moves, 0); // الحركة الافتتاحية لا تقفل تعديل الأرصدة
+});
+
+test('items:save update refreshes the opening move without duplicates', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare('INSERT INTO warehouses (name, location) VALUES (?,?)').run('المخزن الرئيسي', 'داخل المصنع');
+  const h = stubIpc();
+  const { id } = h['items:save'](null, { code: '302', name: 'غطاء', unit_name: 'غطاء', qty_salem: 100 }, 1);
+  h['items:save'](null, { id, code: '302', name: 'غطاء محسن', unit_name: 'غطاء', qty_salem: 250 }, 1);
+  const rows = db.prepare("SELECT * FROM stock_moves WHERE doc_type='opening' AND doc_id=?").all(id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].qty_in_pieces, 250);
+});
+
+test('items:delete allows deleting an item with only opening moves and removes them', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare('INSERT INTO warehouses (name, location) VALUES (?,?)').run('المخزن الرئيسي', 'داخل المصنع');
+  const h = stubIpc();
+  const { id } = h['items:save'](null, { code: '303', name: 'امبول', unit_name: 'امبول', qty_salem: 10 }, 1);
+  const r = h['items:delete'](null, id, 1);
+  assert.ok(r.ok);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM items').get().c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='opening'").get().c, 0);
+});
+
+test('items:import writes opening moves for imported quantities', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare('INSERT INTO warehouses (name, location) VALUES (?,?)').run('المخزن الرئيسي', 'داخل المصنع');
+  const h = stubIpc();
+  h['items:import'](null, [{ code: '304', name: 'كيس', unit_name: 'كيس', qty_salem: 300 }], 1);
+  const it = db.prepare('SELECT * FROM items WHERE code=?').get('304');
+  const m = db.prepare("SELECT * FROM stock_moves WHERE doc_type='opening' AND doc_id=?").get(it.id);
+  assert.ok(m, 'يجب إنشاء حركة افتتاحية للصنف المستورد');
+  assert.equal(m.qty_in_pieces, 300);
+});

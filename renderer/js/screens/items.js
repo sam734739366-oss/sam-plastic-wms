@@ -120,6 +120,7 @@ register('items', {
         <button class="btn primary" id="btn-add">+ إضافة صنف</button>
         <button class="btn" id="btn-import">استيراد من ملف</button>
         <span class="spacer"></span>
+        <button class="btn" id="btn-print">طباعة القائمة</button>
         <input id="f-search" placeholder="بحث بالكود أو الاسم…" style="width:230px">
       </div>
       <div id="summary" class="summary-line"></div>
@@ -128,6 +129,25 @@ register('items', {
     el.querySelector('#btn-add').onclick = () => edit(null, () => refresh());
     el.querySelector('#btn-import').onclick = () => importModal(() => refresh());
     el.querySelector('#f-search').addEventListener('input', renderTableData);
+    el.querySelector('#btn-print').onclick = async () => {
+      const q = (el.querySelector('#f-search')?.value || '').trim();
+      const filtered = q
+        ? rows.filter(r => String(r.code).includes(q) || (r.name || '').includes(q))
+        : rows;
+      try {
+        const settings = await api.invoke('settings:get');
+        await api.invoke('print:open', {
+          kind: 'report',
+          title: 'قائمة الأصناف',
+          metaLines: ['عدد الأصناف: ' + filtered.length, 'تاريخ الطباعة: ' + new Date().toLocaleString('ar')],
+          headers: ['الكود', 'الاسم', 'الوحدة', 'وزن الوحدة', 'التعبئة', 'سليم', 'تالف', 'محرز'],
+          rows: filtered.map(r => [esc(r.code), esc(r.name), esc(r.unit_name), weightCell(r).replace(/<[^>]*>/g, ''),
+            packCell(r).replace(/<[^>]*>/g, ''), fmt(r.qty_salem), fmt(r.qty_talef), fmt(r.qty_muharraz)]),
+          foot: `<div class="notes"><b>إجمالي — سليم: ${fmt(filtered.reduce((a, r) => a + (Number(r.qty_salem) || 0), 0))} — تالف: ${fmt(filtered.reduce((a, r) => a + (Number(r.qty_talef) || 0), 0))} — محرز: ${fmt(filtered.reduce((a, r) => a + (Number(r.qty_muharraz) || 0), 0))}</b></div>`,
+          settings,
+        });
+      } catch (e) { toast(String(e.message || e), 'err'); }
+    };
 
     function renderTableData() {
       const q = (el.querySelector('#f-search')?.value || '').trim();
@@ -195,12 +215,14 @@ register('items', {
           <div class="field"><label>عدد القطع في الكرتون (اختياري)</label><input id="f-carton" inputmode="numeric" value="${esc(row?.pieces_per_carton || '')}"></div>
           <div class="field"><label>عدد القطع في الشدة (اختياري)</label><input id="f-shadda" inputmode="numeric" value="${esc(row?.pieces_per_shadda || '')}"></div>
           <div class="field"><label>عدد القطع في الكيس (اختياري)</label><input id="f-bag" inputmode="numeric" value="${esc(row?.pieces_per_bag || '')}"></div>
-          <div class="field"><label>الكمية السليمة (سليم)</label><input id="f-salem" inputmode="numeric" value="${esc(row?.qty_salem || '')}" ${locked ? 'disabled' : ''}></div>
-          <div class="field"><label>الكمية التالفة (تالف)</label><input id="f-talef" inputmode="numeric" value="${esc(row?.qty_talef || '')}" ${locked ? 'disabled' : ''}></div>
-          <div class="field"><label>الكمية المحرزة (محرز)</label><input id="f-muharraz" inputmode="numeric" value="${esc(row?.qty_muharraz || '')}" ${locked ? 'disabled' : ''}></div>
+          <div class="field"><label>رصيد افتتاحي سليم</label><input id="f-salem" inputmode="numeric" value="${esc(row?.qty_salem || '')}" ${locked ? 'disabled' : ''}></div>
+          <div class="field"><label>رصيد افتتاحي تالف</label><input id="f-talef" inputmode="numeric" value="${esc(row?.qty_talef || '')}" ${locked ? 'disabled' : ''}></div>
+          <div class="field"><label>رصيد افتتاحي محرز</label><input id="f-muharraz" inputmode="numeric" value="${esc(row?.qty_muharraz || '')}" ${locked ? 'disabled' : ''}></div>
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(row?.notes || '')}"></div>
         </div>
-        ${locked ? '<p class="muted" style="margin:10px 0 0">هذا الصنف له حركات مخزون، لذلك تُحدَّث كميات سليم/تالف/محرز تلقائياً من الحركات ولا يمكن تعديلها يدوياً.</p>' : ''}
+        ${locked
+          ? '<p class="muted" style="margin:10px 0 0">هذا الصنف له حركات مخزون، لذلك تُحدَّث كميات سليم/تالف/محرز تلقائياً من المستندات ولا يمكن تعديلها يدوياً.</p>'
+          : '<p class="muted" style="margin:10px 0 0">الأرصدة الافتتاحية تُسجَّل كحركة مخزون في «المخزن الرئيسي» وتظهر فوراً في الجرد والتقارير وتصبح قابلة للصرف والبيع.</p>'}
         <div id="conv" style="margin-top:10px;color:#2450c8;font-size:13px;line-height:1.8"></div>
       `, [
         {

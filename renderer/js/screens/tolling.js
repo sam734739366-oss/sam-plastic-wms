@@ -2,7 +2,7 @@ import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
 import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
-import { fmtNum, today } from '../fmt.js';
+import { fmtMoney, fmtNum, today } from '../fmt.js';
 
 register('tolling', {
   title: 'النفخ للغير',
@@ -43,10 +43,17 @@ register('tolling', {
           { key: 'total_pieces', label: 'الحبات', render: r => fmtNum(r.total_pieces, 0) },
           { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
           { key: 'actions', label: '', render: r => `<button class="btn mini" data-view="${r.id}">عرض</button>
+            <button class="btn mini" data-print="${r.id}">طباعة</button>
             <button class="btn mini" data-edit="${r.id}">تعديل</button>
             <button class="btn mini danger" data-void="${r.id}">إلغاء</button>` },
         ], receipts);
         body.querySelectorAll('[data-view]').forEach(b => b.onclick = () => receiptView(Number(b.dataset.view)));
+        body.querySelectorAll('[data-print]').forEach(b => b.onclick = async () => {
+          try {
+            const doc = await api.invoke('tolling:receiptGet', Number(b.dataset.print));
+            await api.invoke('print:open', { kind: 'toll_receipt', doc, settings: await api.invoke('settings:get') });
+          } catch (e) { toast(String(e.message || e), 'err'); }
+        });
         body.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
           const doc = await api.invoke('tolling:receiptGet', Number(b.dataset.edit));
           receiptForm(doc, customers, items);
@@ -73,9 +80,16 @@ register('tolling', {
           { key: 'invoice_number', label: 'فاتورة الأجرة', render: r => r.invoice_number || '—' },
           { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
           { key: 'actions', label: '', render: r => `<button class="btn mini" data-view="${r.id}">عرض</button>
+            <button class="btn mini" data-print="${r.id}">طباعة</button>
             <button class="btn mini danger" data-void="${r.id}">إلغاء</button>` },
         ], deliveries);
         body.querySelectorAll('[data-view]').forEach(b => b.onclick = () => deliveryView(Number(b.dataset.view)));
+        body.querySelectorAll('[data-print]').forEach(b => b.onclick = async () => {
+          try {
+            const doc = await api.invoke('tolling:deliveryGet', Number(b.dataset.print));
+            await api.invoke('print:open', { kind: 'toll_delivery', doc, settings: await api.invoke('settings:get') });
+          } catch (e) { toast(String(e.message || e), 'err'); }
+        });
         body.querySelectorAll('[data-void]').forEach(b => b.onclick = async () => {
           if (!(await confirmDialog('سيُلغى سند التسليم ويُعاد لرصيد العميل. متابعة؟'))) return;
           try {
@@ -123,10 +137,16 @@ register('tolling', {
             </select></div>
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(doc ? doc.notes || '' : '')}"></div>
         </div>
-        <div class="prows-head">
-          <span>الصنف</span><span>عدد العلب</span><span>حبات/علبة</span><span>الحبات</span><span>الوزن كجم</span><span>ملاحظات</span><span></span>
-        </div>
-        <div id="irows"></div>
+        <table class="doc-lines">
+          <thead><tr>
+            <th>الصنف</th><th>عدد العلب</th><th>حبات/علبة</th><th>الحبات</th><th>الوزن كجم</th><th>ملاحظات</th><th></th>
+          </tr></thead>
+          <tbody id="irows"></tbody>
+          <tfoot><tr>
+            <td colspan="3"><b>إجمالي الحبات المستلمة</b></td>
+            <td id="f-total">0</td><td colspan="3"></td>
+          </tr></tfoot>
+        </table>
         <button class="btn small" id="add-row" type="button">+ إضافة بند</button>`,
         [{ label: 'حفظ', class: 'primary', onClick: async (b) => {
           try {
@@ -148,24 +168,32 @@ register('tolling', {
             b.remove(); toast('تم الحفظ', 'ok'); await load('receipts');
           } catch (e) { toast(String(e.message || e), 'err'); }
         } }, { label: 'إلغاء', onClick: (b) => b.remove() }]);
-      back.querySelector('.modal').style.minWidth = '900px';
       const rowsWrap = back.querySelector('#irows');
+      const totalEl = back.querySelector('#f-total');
       const itemById = (id) => items.find(i => i.id === id);
       suggest.then(n => { if (!doc && n) back.querySelector('#f-num').value = n; }).catch(() => {});
 
+      function updateTotal() {
+        let total = 0;
+        for (const r of rowsWrap.querySelectorAll('.irow')) {
+          total += (parseFloat(r.querySelector('.p-boxes').value) || 0) * (parseFloat(r.querySelector('.p-perbox').value) || 0);
+        }
+        totalEl.textContent = fmtNum(total, 0) + ' حبة';
+      }
+
       function addRow(data = {}) {
-        const row = document.createElement('div');
+        const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
-          <input class="p-boxes" type="number" min="0" step="any" value="${esc(data.boxes ?? '')}">
-          <input class="p-perbox" type="number" min="0" step="any" value="${esc(data.pieces_per_box ?? '')}">
-          <span class="p-calc muted"></span>
-          <input class="p-weight" type="number" min="0" step="any" value="${esc(data.weight_kg ?? '')}">
-          <input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}">
-          <button class="btn mini danger p-del" type="button">×</button>`;
+          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td><input class="p-boxes num" type="number" min="0" step="any" value="${esc(data.boxes ?? '')}"></td>
+          <td><input class="p-perbox num" type="number" min="0" step="any" value="${esc(data.pieces_per_box ?? '')}"></td>
+          <td><span class="p-calc muted"></span></td>
+          <td><input class="p-weight num" type="number" min="0" step="any" value="${esc(data.weight_kg ?? '')}"></td>
+          <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
+          <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
-        row.querySelector('.p-del').onclick = () => row.remove();
+        row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
         const itemSel = row.querySelector('.p-item');
         const perBox = row.querySelector('.p-perbox');
         const boxes = row.querySelector('.p-boxes');
@@ -181,6 +209,7 @@ register('tolling', {
           const b = parseFloat(boxes.value) || 0;
           const p = parseFloat(perBox.value) || 0;
           calc.textContent = b && p ? fmtNum(b * p, 0) + ' حبة' : '';
+          updateTotal();
         }
         itemSel.onchange = fillPerBox;
         boxes.oninput = update;
@@ -226,10 +255,16 @@ register('tolling', {
           <div class="field"><label>ملاحظات</label><input id="f-notes" value="${esc(doc ? doc.notes || '' : '')}"></div>
         </div>
         <p id="bal-line" class="muted" style="margin:8px 0"></p>
-        <div class="prows-head">
-          <span>الصنف</span><span>الكمية</span><span>الوحدة</span><span>الحبات</span><span>ملاحظات</span><span></span>
-        </div>
-        <div id="irows"></div>
+        <table class="doc-lines">
+          <thead><tr>
+            <th>الصنف</th><th>الكمية</th><th>الوحدة</th><th>الحبات</th><th>ملاحظات</th><th></th>
+          </tr></thead>
+          <tbody id="irows"></tbody>
+          <tfoot><tr>
+            <td colspan="3"><b>إجمالي الحبات المسلمة</b></td>
+            <td id="f-total">0</td><td colspan="2"></td>
+          </tr></tfoot>
+        </table>
         <button class="btn small" id="add-row" type="button">+ إضافة بند</button>
         <div class="field check" style="margin-top:14px">
           <label><input type="checkbox" id="f-inv"> إنشاء فاتورة أجرة نفخ مع التسليم</label>
@@ -240,10 +275,16 @@ register('tolling', {
             <div class="field"><label>السائق</label><input id="f-inv-driver"></div>
             <div class="field"><label>رقم السيارة</label><input id="f-inv-car"></div>
           </div>
-          <div class="prows-head">
-            <span>بند الأجرة</span><span>الكمية (حبة)</span><span>السعر</span><span>الإجمالي</span><span></span>
-          </div>
-          <div id="inv-rows"></div>
+          <table class="doc-lines">
+            <thead><tr>
+              <th>بند الأجرة</th><th>الكمية (حبة)</th><th>السعر</th><th>الإجمالي</th><th></th>
+            </tr></thead>
+            <tbody id="inv-rows"></tbody>
+            <tfoot><tr>
+              <td colspan="3"><b>إجمالي الأجرة</b></td>
+              <td id="f-inv-total">0</td><td></td>
+            </tr></tfoot>
+          </table>
           <button class="btn small" id="add-inv-row" type="button">+ إضافة بند أجرة</button>
         </div>`,
         [{ label: 'حفظ', class: 'primary', onClick: async (b) => {
@@ -280,12 +321,21 @@ register('tolling', {
             b.remove(); toast('تم الحفظ', 'ok'); await load('deliveries');
           } catch (e) { toast(String(e.message || e), 'err'); }
         } }, { label: 'إلغاء', onClick: (b) => b.remove() }]);
-      back.querySelector('.modal').style.minWidth = '880px';
       suggest.then(n => { if (!doc && n) back.querySelector('#f-num').value = n; }).catch(() => {});
 
       const rowsWrap = back.querySelector('#irows');
+      const totalEl = back.querySelector('#f-total');
       const itemById = (id) => items.find(i => i.id === id);
       const balLine = back.querySelector('#bal-line');
+
+      function updateTotal() {
+        let total = 0;
+        for (const r of rowsWrap.querySelectorAll('.irow')) {
+          const item = itemById(Number(r.querySelector('.p-item').value));
+          total += toPieces(r.querySelector('.p-qty').value, r.querySelector('.p-unit').value, item) || 0;
+        }
+        totalEl.textContent = fmtNum(total, 0) + ' حبة';
+      }
 
       async function refreshBal() {
         const pid = Number(back.querySelector('#f-party').value);
@@ -301,17 +351,17 @@ register('tolling', {
       back.querySelector('#f-party').onchange = refreshBal;
 
       function addRow(data = {}) {
-        const row = document.createElement('div');
+        const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
-          <input class="p-qty" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}">
-          <select class="p-unit"></select>
-          <span class="p-calc muted"></span>
-          <input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}">
-          <button class="btn mini danger p-del" type="button">×</button>`;
+          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
+          <td><select class="p-unit"></select></td>
+          <td><span class="p-calc muted"></span></td>
+          <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
+          <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
-        row.querySelector('.p-del').onclick = () => row.remove();
+        row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
         const itemSel = row.querySelector('.p-item');
         const unitSel = row.querySelector('.p-unit');
         const qty = row.querySelector('.p-qty');
@@ -330,6 +380,7 @@ register('tolling', {
           const item = itemById(Number(itemSel.value));
           const pieces = toPieces(qty.value, unitSel.value, item);
           calc.textContent = pieces != null ? fmtNum(pieces, 0) + ' حبة' : '—';
+          updateTotal();
         }
         itemSel.onchange = refresh;
         unitSel.onchange = update;
@@ -347,24 +398,35 @@ register('tolling', {
 
       const invWrap = back.querySelector('#inv-wrap');
       const invRows = back.querySelector('#inv-rows');
+      const invTotalEl = back.querySelector('#f-inv-total');
       back.querySelector('#f-inv').onchange = () => {
         invWrap.hidden = !back.querySelector('#f-inv').checked;
       };
+      function updateInvTotal() {
+        let total = 0;
+        for (const r of invRows.querySelectorAll('.irow')) {
+          const q = parseFloat(r.querySelector('.p-qty').value) || 0;
+          const p = parseFloat(r.querySelector('.p-price').value) || 0;
+          total += q * p;
+        }
+        invTotalEl.textContent = fmtMoney(total);
+      }
       function addInvRow() {
-        const row = document.createElement('div');
+        const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select>
-          <input class="p-qty" type="number" min="0" step="any" value="0">
-          <input class="p-price" type="number" min="0" step="any" value="">
-          <span class="p-calc muted">0</span>
-          <button class="btn mini danger p-del" type="button">×</button>`;
+          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td><input class="p-qty num" type="number" min="0" step="any" value="0"></td>
+          <td><input class="p-price num" type="number" min="0" step="any" value=""></td>
+          <td><span class="p-calc muted">0</span></td>
+          <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         invRows.appendChild(row);
-        row.querySelector('.p-del').onclick = () => row.remove();
+        row.querySelector('.p-del').onclick = () => { row.remove(); updateInvTotal(); };
         const update = () => {
           const q = parseFloat(row.querySelector('.p-qty').value) || 0;
           const p = parseFloat(row.querySelector('.p-price').value) || 0;
           row.querySelector('.p-calc').textContent = fmtNum(q * p);
+          updateInvTotal();
         };
         row.querySelector('.p-qty').oninput = update;
         row.querySelector('.p-price').oninput = update;

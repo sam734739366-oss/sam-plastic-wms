@@ -280,7 +280,7 @@ body {
 }
 .sidebar-footer .btn { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .16); color: #e2eaf7; }
 .sidebar-footer .btn:hover { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .3); }
-.screen { flex: 1; overflow: auto; padding: 24px 26px; }
+.screen { flex: 1; min-width: 0; overflow: auto; padding: 24px 26px; }
 
 /* ===== البطاقات ===== */
 .card {
@@ -335,6 +335,8 @@ table.data td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
 table.data tbody tr { transition: background .14s ease; }
 table.data tbody tr:hover { background: #f0f4ff; }
 table.data tbody tr:active { background: #dde7ff; }
+.table-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
+.table-wrap table.data { min-width: max-content; }
 
 /* ===== الأزرار ===== */
 .btn {
@@ -396,7 +398,8 @@ textarea { min-height: 56px; resize: vertical; }
 @keyframes fade { from { opacity: 0; } }
 .modal {
   background: #fff; border-radius: 16px; padding: 24px;
-  min-width: 460px; max-width: 92vw; max-height: 88vh; overflow: auto;
+  min-width: min(460px, 94vw); max-width: min(1120px, 94vw);
+  max-height: 88vh; overflow: auto;
   box-shadow: 0 26px 64px rgba(2, 6, 23, .35);
   animation: pop .24s cubic-bezier(.2, .9, .3, 1.15);
 }
@@ -447,21 +450,20 @@ textarea { min-height: 56px; resize: vertical; }
 .form-grid.inline .field { margin-bottom: 0; }
 .summary-line { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
 
-/* ===== بنود المستندات (شراء/صرف) ===== */
-.prows-head, .prow {
-  display: grid; gap: 8px; align-items: center;
-  grid-template-columns: 1.6fr 1.2fr .7fr .8fr 1.2fr .8fr .9fr 1.1fr 34px;
-  margin-bottom: 8px;
+/* ===== بنود المستندات (جدول داخل النموذج) ===== */
+.doc-lines { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.doc-lines th {
+  background: #f8fafc; padding: 7px 8px; text-align: right;
+  border-bottom: 2px solid var(--border); white-space: nowrap;
+  color: #475569; font-weight: 700; font-size: 12px;
 }
-.prows-head { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
-.prow select, .prow input { padding: 6px 8px; font-size: 12.5px; }
-.p-calc, .p-total { font-size: 12px; white-space: nowrap; }
-.p-prefix-wrap input { font-size: 12px; }
-.irow { display: grid; gap: 8px; align-items: center;
-  grid-template-columns: 1.6fr 1.2fr .7fr .8fr 1.8fr 1fr 34px; margin-bottom: 8px; }
-.irow select, .irow input { padding: 6px 8px; font-size: 12.5px; }
-.p-bal { display: flex; flex-direction: column; gap: 4px; }
-.p-bal .bal-text { font-size: 11.5px; }
+.doc-lines td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.doc-lines select, .doc-lines input { padding: 6px 8px; font-size: 12.5px; min-width: 0; }
+.doc-lines .num { width: 92px; }
+.doc-lines .p-calc, .doc-lines .bal-text { font-size: 12px; white-space: nowrap; }
+.doc-lines .bal-text { font-size: 11.5px; }
+.doc-lines tfoot td { background: #f1f5fb; font-weight: 700; border-top: 2px solid var(--border); white-space: nowrap; }
+.doc-lines td.del { width: 34px; text-align: center; }
 .carton-tags { display: flex; flex-wrap: wrap; gap: 3px; }
 
 /* ===== متفرقات ===== */

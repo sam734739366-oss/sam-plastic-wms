@@ -4,7 +4,7 @@ import { toast, esc } from '../ui.js';
 import { fmtMoney } from '../fmt.js';
 
 const N = (n, d = 0) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: d });
-const DOC_LABEL = { purchase: 'شراء', issue: 'صرف إنتاج', receive: 'استلام', invoice: 'فاتورة', exit: 'خروج', scrap: 'تالف', transfer: 'نقل' };
+const DOC_LABEL = { opening: 'رصيد افتتاحي', purchase: 'شراء', issue: 'صرف إنتاج', receive: 'استلام', invoice: 'فاتورة', exit: 'خروج', scrap: 'تالف', transfer: 'نقل' };
 const DISP_LABEL = { to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد', sold_scrap: 'بيع خردة' };
 const INV_LABEL = { sale: 'بيع', scrap: 'خردة', blowing_fee: 'أجرة نفخ' };
 const ACTION_LABEL = { create: 'إضافة', update: 'تعديل', delete: 'حذف', void: 'إلغاء', login: 'دخول', stock_write: 'تسجيل حركة مخزون' };
@@ -18,8 +18,8 @@ function selectHtml(id, options) {
 }
 
 function tableHtml(columns, rows) {
-  return `<table class="data"><thead><tr>${columns.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  return `<div class="table-wrap"><table class="data"><thead><tr>${columns.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 register('reports', {
@@ -34,6 +34,28 @@ register('reports', {
     ]);
 
     const REPORTS = {
+      inventory: {
+        label: 'جرد المخزون',
+        filterHtml: () => `
+          <div class="field"><label>المخزن</label>${selectHtml('r-warehouse', [{ value: '', label: 'كل المخازن' }, ...warehouses.map(w => ({ value: w.id, label: w.name }))])}</div>`,
+        getFilters: (el) => ({
+          warehouseId: Number(el.querySelector('#r-warehouse').value) || null,
+        }),
+        columns: [
+          { label: 'الكود', cell: r => r.code },
+          { label: 'الصنف', cell: r => r.name },
+          { label: 'الوحدة', cell: r => r.unit_name },
+          { label: 'الرصيد المخزني', cell: r => r.balance_label },
+          { label: 'سليم', cell: r => N(r.qty_salem) },
+          { label: 'تالف', cell: r => N(r.qty_talef) },
+          { label: 'محرز', cell: r => N(r.qty_muharraz) },
+          { label: 'الوزن كجم', cell: r => N(r.balance_kg, 2) },
+        ],
+        foot: (data) => {
+          const rows = Array.isArray(data) ? data : data.rows;
+          return `<div class="notes"><b>عدد الأصناف: ${rows.length} — إجمالي الحبات: ${N(rows.reduce((s, r) => s + (Number(r.balance_pieces) || 0), 0))} — إجمالي الوزن: ${N(rows.reduce((s, r) => s + (Number(r.balance_kg) || 0), 0), 2)} كجم</b></div>`;
+        },
+      },
       movement: {
         label: 'حركة صنف (سجل مخزني)',
         filterHtml: () => `
@@ -61,6 +83,14 @@ register('reports', {
           { label: 'الرصيد كجم', cell: r => N(r.balance_kg, 2) },
           { label: 'ملاحظات', cell: r => r.notes || '' },
         ],
+        foot: (data) => {
+          const rows = Array.isArray(data) ? data : data.rows;
+          const pin = rows.reduce((s, r) => s + (Number(r.qty_in_pieces) || 0), 0);
+          const pout = rows.reduce((s, r) => s + (Number(r.qty_out_pieces) || 0), 0);
+          const win = rows.reduce((s, r) => s + (Number(r.weight_in_kg) || 0), 0);
+          const wout = rows.reduce((s, r) => s + (Number(r.weight_out_kg) || 0), 0);
+          return `<div class="notes"><b>الإجمالي — داخل: ${N(pin)} حبة — خارج: ${N(pout)} حبة — الصافي: ${N(pin - pout)} حبة &nbsp;|&nbsp; الوزن: داخل ${N(win, 2)} كجم — خارج ${N(wout, 2)} كجم — الصافي ${N(win - wout, 2)} كجم</b></div>`;
+        },
       },
       production: {
         label: 'تقرير الإنتاج',
@@ -159,7 +189,7 @@ register('reports', {
         ],
         foot: (data) => `<div class="notes"><b>إجمالي المبيعات: ${fmtMoney(data.total)} — عدد الفواتير: ${data.rows.length}</b></div>`,
       },
-      statement: {
+      partyStatement: {
         label: 'كشف حساب طرف',
         filterHtml: () => `
           <div class="field"><label>الطرف</label>${selectHtml('r-party', parties.map(p => ({ value: p.id, label: p.name })))}</div>

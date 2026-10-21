@@ -33,8 +33,8 @@ export function implicationsDialog(title, lines) {
 }
 
 export function renderTable(el, columns, rows) {
-  el.innerHTML = `<table class="data"><thead><tr>${columns.map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(r => `<tr>${columns.map(c => `<td>${c.render ? c.render(r) : (r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  el.innerHTML = `<div class="table-wrap"><table class="data"><thead><tr>${columns.map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${columns.map(c => `<td>${c.render ? c.render(r) : esc(r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 export function openModal(title, bodyHtml, buttons) {
