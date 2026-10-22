@@ -20,7 +20,7 @@ module.exports = function register(ipcMain) {
       LEFT JOIN production_results pr ON pr.carton_id=c.id
       ORDER BY c.id DESC`).all();
     for (const r of cartons) {
-      // الفرق: نقص (باقٍ غير محسوب) أو زيادة (تجاوز حبات الكرتون) أو مكتمل
+      // الفرق: زيادة (باقٍ في الكرتون غير محسوب) أو نقص (تجاوز الإنتاج حبات الكرتون) أو مكتمل
       const total = (Number(r.good_pieces) || 0) + (Number(r.defect_before) || 0) + (Number(r.defect_after) || 0);
       r.rest = r.status === 'finished' ? (Number(r.pieces) || 0) - total : null;
       r.total = total;

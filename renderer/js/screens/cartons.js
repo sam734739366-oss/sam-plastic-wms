@@ -8,8 +8,8 @@ const STATUS_TAG = { in_stock: 'salem', issued: 'new', finished: 'muharraz' };
 
 function restHtml(r) {
   if (r.rest == null) return '—';
-  if (r.rest > 0) return `<span class="tag talef">نقص ${fmtNum(r.rest, 0)}</span>`;
-  if (r.rest < 0) return `<span class="tag salem">زيادة ${fmtNum(-r.rest, 0)}</span>`;
+  if (r.rest > 0) return `<span class="tag salem">زيادة ${fmtNum(r.rest, 0)}</span>`;
+  if (r.rest < 0) return `<span class="tag talef">نقص ${fmtNum(-r.rest, 0)}</span>`;
   return '<span class="tag salem">مكتمل</span>';
 }
 
@@ -23,7 +23,7 @@ async function doPrint(rows, issues) {
       c.good_pieces == null ? '—' : fmtNum(c.good_pieces, 0),
       c.defect_before == null ? '—' : fmtNum(c.defect_before, 0),
       c.defect_after == null ? '—' : fmtNum(c.defect_after, 0),
-      c.rest == null ? '—' : (c.rest > 0 ? `نقص ${fmtNum(c.rest, 0)}` : c.rest < 0 ? `زيادة ${fmtNum(-c.rest, 0)}` : 'مكتمل'),
+      c.rest == null ? '—' : (c.rest > 0 ? `زيادة ${fmtNum(c.rest, 0)}` : c.rest < 0 ? `نقص ${fmtNum(-c.rest, 0)}` : 'مكتمل'),
     ]);
     const footLines = issues.map(x =>
       `تصريح ${x.doc_number}: المصروف ${fmtNum(x.issued_pieces, 0)} — السليم المعلن ${fmtNum(x.declared_good, 0)} — المستلم ${fmtNum(x.received_pieces, 0)} — ${x.receive_diff > 0 ? `زيادة ${fmtNum(x.receive_diff, 0)}` : x.receive_diff < 0 ? `نقص ${fmtNum(-x.receive_diff, 0)}` : 'مطابق'}`);
@@ -44,8 +44,8 @@ register('cartons', {
     const inStock = cartons.filter(c => c.status === 'in_stock').length;
     const issued = cartons.filter(c => c.status === 'issued').length;
     const finished = cartons.filter(c => c.status === 'finished').length;
-    const shortage = cartons.reduce((s, c) => s + (c.rest > 0 ? c.rest : 0), 0);
-    const surplus = cartons.reduce((s, c) => s + (c.rest < 0 ? -c.rest : 0), 0);
+    const surplus = cartons.reduce((s, c) => s + (c.rest > 0 ? c.rest : 0), 0);
+    const shortage = cartons.reduce((s, c) => s + (c.rest < 0 ? -c.rest : 0), 0);
 
     el.innerHTML = `
       <div class="help-card">

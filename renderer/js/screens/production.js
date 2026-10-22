@@ -51,10 +51,10 @@ register('production', {
         { key: 'defect_before', label: 'تالف قبل', render: r => fmtNum(r.defect_before, 0) },
         { key: 'defect_after', label: 'تالف بعد', render: r => fmtNum(r.defect_after, 0) },
         {
-          key: 'rest', label: 'نقص / زيادة', render: r => {
+          key: 'rest', label: 'زيادة / نقص', render: r => {
             const rest = restOf(r);
-            return rest > 0 ? `<span class="tag talef">نقص ${fmtNum(rest, 0)}</span>`
-              : rest < 0 ? `<span class="tag salem">زيادة ${fmtNum(-rest, 0)}</span>`
+            return rest > 0 ? `<span class="tag salem">زيادة ${fmtNum(rest, 0)}</span>`
+              : rest < 0 ? `<span class="tag talef">نقص ${fmtNum(-rest, 0)}</span>`
                 : '<span class="tag salem">مكتمل</span>';
           }
         },
@@ -115,7 +115,7 @@ register('production', {
                 good_pieces: good, defect_before: before, defect_after: after,
                 notes: b.querySelector('#f-notes').value,
               }, currentUser().id);
-              const restMsg = res.rest > 0 ? ` — نقص غير محسوب: ${fmtNum(res.rest, 0)}` : res.rest < 0 ? ` — زيادة: ${fmtNum(-res.rest, 0)}` : ' — مكتمل';
+              const restMsg = res.rest > 0 ? ` — زيادة غير محسوبة: ${fmtNum(res.rest, 0)}` : res.rest < 0 ? ` — نقص: ${fmtNum(-res.rest, 0)}` : ' — مكتمل';
               b.remove(); toast(`تم حفظ النتيجة${restMsg}`, 'ok'); await load();
             } catch (e) { toast(String(e.message || e), 'err'); }
           } }, { label: 'إلغاء', onClick: (b) => b.remove() }]);
@@ -126,7 +126,7 @@ register('production', {
           const sum = good + before + after;
           const rest = row.pieces - sum;
           back.querySelector('#sum-line').innerHTML =
-            `المجموع: <b>${fmtNum(sum, 0)}</b> من ${fmtNum(row.pieces, 0)} حبة — ${rest > 0 ? `<b>نقص ${fmtNum(rest, 0)}</b> غير محسوب` : rest < 0 ? `<b>زيادة ${fmtNum(-rest, 0)}</b> عن حبات الكرتون` : 'مكتمل'}`;
+            `المجموع: <b>${fmtNum(sum, 0)}</b> من ${fmtNum(row.pieces, 0)} حبة — ${rest > 0 ? `<b>زيادة ${fmtNum(rest, 0)}</b> غير محسوبة` : rest < 0 ? `<b>نقص ${fmtNum(-rest, 0)}</b> عن حبات الكرتون` : 'مكتمل'}`;
         };
         ['#f-good', '#f-before', '#f-after'].forEach(s => back.querySelector(s).oninput = update);
         update();
