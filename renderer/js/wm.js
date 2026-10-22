@@ -250,11 +250,14 @@ export function openPopup({ title, bodyHtml, buttons = [] }) {
   wireWindow(win, { dragHandle: el.querySelector('.win-bar') });
 
   // توافق مع الاستخدام الحالي: openModal يُرجع العنصر ويُغلق بـ .remove()
+  // ملاحظة: __native يجب أن يُسند على دالة التظليل نفسها لا على دالة النموذج
+  // الأصلية (el.remove قبل التظليل)، وإلا لما استطاع closeWin استعادة الأصلية.
   const nativeRemove = el.remove.bind(el);
-  el.remove.__native = nativeRemove;
-  el.remove = () => {
+  const override = () => {
     if (pops.has(name)) closeWin(win);
     else nativeRemove();
   };
+  override.__native = nativeRemove;
+  el.remove = override;
   return el;
 }
