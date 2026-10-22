@@ -184,8 +184,31 @@ function reportTemplate(settings, title, metaLines, headers, rows, foot = '') {
     settings.report_page_size || 'A4', false);
 }
 
+// دليل المستخدم: صفحة غنية بأقسام وخطوات — تُطبع على A4
+function guideTemplate(settings, bodyHtml) {
+  return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+  <style>
+    @page { size: ${settings.report_page_size || 'A4'}; margin: 12mm; }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-family: "Segoe UI", Tahoma, sans-serif; font-size: 13px; color: #0f172a; margin: 0; line-height: 1.95; }
+    .g-head { background: linear-gradient(135deg, #1e3a8a, #3450b8); color: #fff; border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+    .g-head h1 { margin: 0 0 6px; font-size: 22px; text-align: center; }
+    .g-head p { margin: 0; text-align: center; opacity: .95; font-size: 13px; }
+    h2 { color: #1e3a8a; border-right: 4px solid #d9a441; padding-right: 10px; margin: 22px 0 8px; font-size: 17px; }
+    h3 { color: #3450b8; margin: 14px 0 6px; font-size: 14.5px; }
+    ol { margin: 6px 0; padding-right: 24px; }
+    li { margin-bottom: 4px; }
+    .g-tip { background: #fef9ec; border: 1px solid #f3ddb0; border-right: 4px solid #d9a441; border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+    .g-contact { background: linear-gradient(135deg, #f8f4ea, #fdf6e3); border: 2px solid #d9a441; border-radius: 12px; padding: 16px 18px; margin-top: 24px; text-align: center; }
+    .g-contact b { color: #7c5a10; font-size: 15px; }
+  </style></head><body>
+  <div class="g-head"><h1>دليل المستخدم الكامل</h1><p>${esc(settings.factory_name || 'سام بلاستيك')} — نظام إدارة مصنع نفخ العبوات البلاستيكية</p></div>
+  ${bodyHtml}
+  </body></html>`;
+}
+
 module.exports = {
   purchaseTemplate, issueTemplate, receiveTemplate, invoiceTemplate, exitTemplate,
   tollReceiptTemplate, tollDeliveryTemplate, scrapTemplate, transferTemplate, productionTemplate,
-  paymentTemplate, returnTemplate, reportTemplate,
+  paymentTemplate, returnTemplate, reportTemplate, guideTemplate,
 };

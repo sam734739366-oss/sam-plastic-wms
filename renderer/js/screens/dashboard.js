@@ -1,9 +1,45 @@
 import { register } from '../router.js';
 import { api } from '../api.js';
 import { fmtMoney, fmtNum } from '../fmt.js';
+import { openWindow } from '../wm.js';
+import { monthlyBars, donut, hBars } from '../charts.js';
 
 function card(id, iconSvg, label, tone) {
   return `<div class="stat"><div class="icon ${tone}">${iconSvg}</div><div><div class="num" id="${id}">—</div><div class="lbl">${label}</div></div></div>`;
+}
+
+const emptyHtml = (msg) => `<div class="chart-empty">${msg}</div>`;
+
+function renderCharts(root, c) {
+  const hasMonthly = c.monthly.some((m) => Number(m.purchases) > 0 || Number(m.sales) > 0);
+  root.querySelector('#ch-monthly').innerHTML = hasMonthly
+    ? monthlyBars({
+      labels: c.monthly.map((m) => m.label),
+      series: [
+        { name: 'مشتريات', color: '#3b6cf0', values: c.monthly.map((m) => m.purchases) },
+        { name: 'مبيعات', color: '#16a34a', values: c.monthly.map((m) => m.sales) },
+      ],
+    })
+    : emptyHtml('لا توجد مشتريات أو مبيعات خلال آخر 6 أشهر');
+
+  root.querySelector('#ch-buckets').innerHTML = donut({
+    segments: [
+      { label: 'سليم', value: c.buckets[0].value, color: '#16a34a' },
+      { label: 'تالف', value: c.buckets[1].value, color: '#dc2626' },
+      { label: 'محرز', value: c.buckets[2].value, color: '#6d28d9' },
+    ],
+  }) || emptyHtml('لا يوجد مخزون مسجّل بعد');
+
+  const finRows = c.financial;
+  const hasFin = finRows.some((r) => Number(r.value) > 0);
+  root.querySelector('#ch-fin').innerHTML = hasFin
+    ? hBars({ rows: finRows, color: '#2450c8', color2: '#8fb4ff', fmt: (v) => fmtMoney(v) })
+    : emptyHtml('لا توجد أرصدة مالية بعد');
+
+  const topRows = c.top_items.map((t) => ({ label: t.name, value: t.qty }));
+  root.querySelector('#ch-top').innerHTML = topRows.length
+    ? hBars({ rows: topRows, color: '#d9a441', color2: '#ffe3a3', fmt: (v) => fmtNum(v, 0) + ' حبة' })
+    : emptyHtml('لا توجد أصناف بمخزون سليم بعد');
 }
 
 const ICONS = {
@@ -20,9 +56,15 @@ register('dashboard', {
   title: 'الرئيسية',
   async mount(el) {
     el.innerHTML = `
-      <div style="margin-bottom:18px">
-        <h2 style="margin:0;font-size:20px;color:#0f172a">نظرة عامة على المصنع</h2>
-        <p class="muted" style="margin:4px 0 0">مؤشرات المخزون والحركة اليومية والحسابات</p>
+      <div class="dash-head" style="margin-bottom:18px">
+        <div>
+          <h2 style="margin:0;font-size:20px;color:#0f172a">نظرة عامة على المصنع</h2>
+          <p class="muted" style="margin:4px 0 0">مؤشرات المخزون والحركة اليومية والحسابات</p>
+        </div>
+        <button id="btn-guide" class="btn guide-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h6M9 11h5"/></svg>
+          دليل المستخدم
+        </button>
       </div>
       <div class="stats">
         ${card('s-items', ICONS.box, 'عدد الأصناف', 't1')}
@@ -36,7 +78,26 @@ register('dashboard', {
         ${card('s-cash', ICONS.coins, 'رصيد النقدية', 't1')}
         ${card('s-cust', ICONS.warn, 'ذمم العملاء (لنا)', 't3')}
         ${card('s-supp', ICONS.warn, 'ذمم الموردين (علينا)', 't2')}
+      </div>
+      <div class="charts-grid">
+        <div class="card">
+          <h2>المبيعات والمشتريات — آخر 6 أشهر</h2>
+          <div id="ch-monthly"></div>
+        </div>
+        <div class="card">
+          <h2>توزيع المخزون (سليم / تالف / محرز)</h2>
+          <div id="ch-buckets"></div>
+        </div>
+        <div class="card">
+          <h2>المركز المالي</h2>
+          <div id="ch-fin"></div>
+        </div>
+        <div class="card">
+          <h2>أعلى الأصناف رصيداً سليماً</h2>
+          <div id="ch-top"></div>
+        </div>
       </div>`;
+    el.querySelector('#btn-guide').onclick = () => openWindow('guide');
     try {
       const d = await api.invoke('dashboard:summary');
       el.querySelector('#s-items').textContent = d.items_count;
@@ -50,6 +111,10 @@ register('dashboard', {
       el.querySelector('#s-cash').textContent = fmtMoney(d.cash_balance);
       el.querySelector('#s-cust').textContent = fmtMoney(d.customers_due);
       el.querySelector('#s-supp').textContent = fmtMoney(d.suppliers_due);
+    } catch (e) { /* لا شيء */ }
+    try {
+      const c = await api.invoke('dashboard:charts');
+      renderCharts(el, c);
     } catch (e) { /* لا شيء */ }
   }
 });

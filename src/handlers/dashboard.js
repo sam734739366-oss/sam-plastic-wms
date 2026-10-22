@@ -8,6 +8,13 @@ function monthRange() {
   return [`${y}-${m}-01`, `${y}-${m}-31`];
 }
 
+const AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+
+function monthKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 module.exports = function register(ipcMain) {
   ipcMain.handle('dashboard:summary', () => {
     const db = getDb();
@@ -50,6 +57,46 @@ module.exports = function register(ipcMain) {
       cash_balance: cash,
       customers_due: recv.customers,
       suppliers_due: recv.suppliers,
+    };
+  });
+
+  ipcMain.handle('dashboard:charts', () => {
+    const db = getDb();
+    const now = new Date();
+    const monthly = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const from = `${monthKey(d)}-01`;
+      const to = `${monthKey(d)}-31`;
+      const purchases = db.prepare(`SELECT COALESCE(SUM(pi.total_price),0) t
+        FROM purchase_items pi JOIN purchases p ON p.id=pi.purchase_id
+        WHERE p.status='active' AND p.doc_date BETWEEN ? AND ?`).get(from, to).t;
+      const sales = db.prepare(`SELECT COALESCE(SUM(ii.total_price),0) t
+        FROM invoice_items ii JOIN invoices inv ON inv.id=ii.invoice_id
+        WHERE inv.status='active' AND inv.doc_date BETWEEN ? AND ?`).get(from, to).t;
+      monthly.push({ label: AR_MONTHS[d.getMonth()], purchases, sales });
+    }
+    const buckets = db.prepare(`SELECT
+      COALESCE(SUM(qty_salem),0) salem, COALESCE(SUM(qty_talef),0) talef, COALESCE(SUM(qty_muharraz),0) muharraz
+      FROM items`).get();
+    const cash = ledger.cashBalance(db);
+    const recv = ledger.receivables(db);
+    const topItems = db.prepare(
+      'SELECT name, qty_salem q FROM items WHERE qty_salem > 0 ORDER BY qty_salem DESC LIMIT 5'
+    ).all();
+    return {
+      monthly,
+      buckets: [
+        { label: 'سليم', value: buckets.salem },
+        { label: 'تالف', value: buckets.talef },
+        { label: 'محرز', value: buckets.muharraz },
+      ],
+      financial: [
+        { label: 'رصيد النقدية', value: cash },
+        { label: 'ذمم العملاء (لنا)', value: recv.customers },
+        { label: 'ذمم الموردين (علينا)', value: recv.suppliers },
+      ],
+      top_items: topItems.map((t) => ({ name: t.name, qty: t.q })),
     };
   });
 };

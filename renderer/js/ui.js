@@ -62,7 +62,16 @@ export function renderTable(el, columns, rows) {
     <tbody>${rows.map(r => `<tr>${columns.map(c => `<td>${c.render ? c.render(r) : esc(r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
+// فاتح النوافذ المنبثقة — يضبطه مدير النوافذ (wm.js) عند التشغيل،
+// فتُفتح النماذج كنوافذ بشرائط تصغير/تكبير/إغلاق ويمكن فتح أكثر من واحدة معاً.
+let popupOpener = null;
+export function setPopupOpener(fn) { popupOpener = fn; }
+
 export function openModal(title, bodyHtml, buttons) {
+  if (popupOpener) {
+    const pop = popupOpener(title, bodyHtml, buttons);
+    if (pop) return pop;
+  }
   const back = document.createElement('div');
   back.className = 'modal-back';
   back.innerHTML = `<div class="modal">

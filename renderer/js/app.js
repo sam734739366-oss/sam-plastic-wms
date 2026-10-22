@@ -4,6 +4,33 @@ import { initWM, openWindow } from './wm.js';
 import { setCurrency } from './fmt.js';
 import { toast } from './ui.js';
 
+// ===== تحسين خانات التاريخ =====
+// كروميوم يرسم تلميح التاريخ الفارغ (يوم/شهر/سنة) بأحرف معكوسة لا يتأثر بأي CSS،
+// لذا يُخفى تلميحه عند عدم التركيز ويُعرض مكانه تلميح عربي سليم،
+// ويظهر التلميح الداخلي طبيعيًا أثناء التركيز لتبقى الكتابة مرئية.
+function enhanceDateInputs(root) {
+  for (const inp of root.querySelectorAll('input[type="date"]')) {
+    if (inp.dataset.dateEnhanced) continue;
+    inp.dataset.dateEnhanced = '1';
+    const parent = inp.parentElement;
+    if (parent && parent.classList.contains('date-box')) continue;
+    const wrap = document.createElement('span');
+    wrap.className = 'date-box';
+    parent.insertBefore(wrap, inp);
+    wrap.appendChild(inp);
+    const hint = document.createElement('span');
+    hint.className = 'date-hint';
+    hint.textContent = 'يوم/شهر/سنة';
+    wrap.appendChild(hint);
+    const upd = () => inp.classList.toggle('filled', !!inp.value);
+    inp.addEventListener('input', upd);
+    inp.addEventListener('change', upd);
+    upd();
+  }
+}
+enhanceDateInputs(document);
+new MutationObserver(() => enhanceDateInputs(document)).observe(document.body, { childList: true, subtree: true });
+
 const u = currentUser();
 if (!u) location.href = 'index.html';
 
@@ -29,6 +56,7 @@ const ROLE_SCREENS = {
   accounts: ['dashboard', 'parties', 'payments', 'statements', 'reports', 'audit'],
 };
 const allowed = (screen) => {
+  if (screen === 'guide') return true; // دليل المستخدم متاح لكل الأدوار
   const list = ROLE_SCREENS[u.role];
   if (!list) return true;
   return list.includes(screen);
@@ -55,10 +83,13 @@ setOpener((name) => {
   openWindow(name, { refresh: true });
 });
 window.addEventListener('wm:focus', (e) => {
-  document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.screen === e.detail.name));
+  const name = e.detail.name;
+  if (name && String(name).startsWith('pop:')) return;
+  document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.screen === name));
 });
 
 import './screens/dashboard.js';
+import './screens/guide.js';
 import './screens/items.js';
 import './screens/parties.js';
 import './screens/warehouses.js';

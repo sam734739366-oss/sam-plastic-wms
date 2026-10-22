@@ -35,6 +35,8 @@ ipcMain.handle('print:open', (e, payload) => {
   let html;
   if (payload.kind === 'report') {
     html = templates.reportTemplate(settings, title, payload.metaLines || [], payload.headers || [], payload.rows || [], payload.foot || '');
+  } else if (payload.kind === 'guide') {
+    html = templates.guideTemplate(settings, payload.html || '');
   } else {
     const tpl = KIND_TEMPLATE[payload.kind];
     if (!tpl) throw new Error('نوع مستند غير معروف للطباعة');
