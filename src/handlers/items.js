@@ -70,17 +70,19 @@ module.exports = function register(ipcMain) {
       qty_salem: Number(row.qty_salem) || 0,
       qty_talef: Number(row.qty_talef) || 0,
       qty_muharraz: Number(row.qty_muharraz) || 0,
+      is_complement: row.is_complement ? 1 : 0,
       notes: row.notes || null,
     };
     if (id) {
       const updateSql = `UPDATE items SET code=@code,name=@name,unit_name=@unit_name,weight_grams=@weight_grams,
         pieces_per_carton=@pieces_per_carton,pieces_per_shadda=@pieces_per_shadda,pieces_per_bag=@pieces_per_bag,
+        is_complement=@is_complement,
         ${hasMoves ? '' : 'qty_salem=@qty_salem,qty_talef=@qty_talef,qty_muharraz=@qty_muharraz,'}
         notes=@notes WHERE id=@id`;
       const params = {
         code, name, unit_name: unit, weight_grams: fields.weight_grams,
         pieces_per_carton: fields.pieces_per_carton, pieces_per_shadda: fields.pieces_per_shadda,
-        pieces_per_bag: fields.pieces_per_bag, notes: fields.notes, id,
+        pieces_per_bag: fields.pieces_per_bag, is_complement: fields.is_complement, notes: fields.notes, id,
       };
       if (!hasMoves) {
         params.qty_salem = fields.qty_salem;
@@ -90,9 +92,9 @@ module.exports = function register(ipcMain) {
       db.prepare(updateSql).run(params);
     } else {
       id = db.prepare(`INSERT INTO items (code,name,item_group,unit_name,weight_grams,pieces_per_carton,
-        pieces_per_shadda,pieces_per_bag,qty_salem,qty_talef,qty_muharraz,notes)
+        pieces_per_shadda,pieces_per_bag,qty_salem,qty_talef,qty_muharraz,is_complement,notes)
         VALUES (@code,@name,2,@unit_name,@weight_grams,@pieces_per_carton,@pieces_per_shadda,@pieces_per_bag,
-        @qty_salem,@qty_talef,@qty_muharraz,@notes)`)
+        @qty_salem,@qty_talef,@qty_muharraz,@is_complement,@notes)`)
         .run(fields).lastInsertRowid;
     }
     // الأرصدة الافتتاحية تنعكس كحركة مخزون حتى تظهر في الجرد والتقارير وتصبح قابلة للصرف والبيع

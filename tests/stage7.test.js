@@ -49,6 +49,17 @@ test('reports:inventory returns balances with labels and warehouse filter', () =
   assert.equal(wh.find(r => r.id === 1).balance_pieces, 0);
 });
 
+test('reports:inventory excludes complement items', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'reports']);
+  db.prepare('UPDATE items SET is_complement=1 WHERE id=2').run();
+  stockIn(db, h, 1, 1, 1500);
+  stockIn(db, h, 1, 2, 300);
+  const all = h['reports:inventory'](null, {});
+  assert.ok(all.find(r => r.id === 1));
+  assert.ok(!all.find(r => r.id === 2));
+});
+
 test('reports:movement computes running balance in date order', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales', 'reports']);

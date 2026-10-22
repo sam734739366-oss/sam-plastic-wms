@@ -48,6 +48,18 @@ test('items:save normalizes Arabic-Indic digits in code', () => {
   assert.equal(row.code, '102');
 });
 
+test('items:save stores the is_complement flag and defaults to 0', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  const { id } = h['items:save'](null, { code: '501', name: 'غطاء كوسفن', unit_name: 'غطاء', is_complement: 1 }, 1);
+  assert.equal(db.prepare('SELECT is_complement FROM items WHERE id=?').get(id).is_complement, 1);
+  const { id: id2 } = h['items:save'](null, { code: '502', name: 'عبوة عادية', unit_name: 'علبة' }, 1);
+  assert.equal(db.prepare('SELECT is_complement FROM items WHERE id=?').get(id2).is_complement, 0);
+  // التعديل يحدّث الخانة أيضاً
+  h['items:save'](null, { id: id2, code: '502', name: 'عبوة عادية', unit_name: 'علبة', is_complement: 1 }, 1);
+  assert.equal(db.prepare('SELECT is_complement FROM items WHERE id=?').get(id2).is_complement, 1);
+});
+
 test('items:save rejects non-numeric code', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();

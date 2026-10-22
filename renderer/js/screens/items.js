@@ -57,6 +57,7 @@ function collect(back) {
     qty_salem: locked ? undefined : (num(v('f-salem')) || 0),
     qty_talef: locked ? undefined : (num(v('f-talef')) || 0),
     qty_muharraz: locked ? undefined : (num(v('f-muharraz')) || 0),
+    is_complement: back.querySelector('#f-complement')?.checked ? 1 : 0,
     notes: v('f-notes').trim() || null,
   };
 }
@@ -140,8 +141,9 @@ register('items', {
           kind: 'report',
           title: 'قائمة الأصناف',
           metaLines: ['عدد الأصناف: ' + filtered.length, 'تاريخ الطباعة: ' + new Date().toLocaleString('ar')],
-          headers: ['الكود', 'الاسم', 'الوحدة', 'وزن الوحدة', 'التعبئة', 'سليم', 'تالف', 'محرز'],
-          rows: filtered.map(r => [esc(r.code), esc(r.name), esc(r.unit_name), weightCell(r).replace(/<[^>]*>/g, ''),
+          headers: ['الكود', 'الاسم', 'الوحدة', 'النوع', 'وزن الوحدة', 'التعبئة', 'سليم', 'تالف', 'محرز'],
+          rows: filtered.map(r => [esc(r.code), esc(r.name), esc(r.unit_name), r.is_complement ? 'مكمل' : 'أساسي',
+            weightCell(r).replace(/<[^>]*>/g, ''),
             packCell(r).replace(/<[^>]*>/g, ''), fmt(r.qty_salem), fmt(r.qty_talef), fmt(r.qty_muharraz)]),
           foot: `<div class="notes"><b>إجمالي — سليم: ${fmt(filtered.reduce((a, r) => a + (Number(r.qty_salem) || 0), 0))} — تالف: ${fmt(filtered.reduce((a, r) => a + (Number(r.qty_talef) || 0), 0))} — محرز: ${fmt(filtered.reduce((a, r) => a + (Number(r.qty_muharraz) || 0), 0))}</b></div>`,
           settings,
@@ -164,6 +166,7 @@ register('items', {
         { key: 'code', label: 'الكود' },
         { key: 'name', label: 'الاسم' },
         { key: 'unit_name', label: 'الوحدة' },
+        { key: 'is_complement', label: 'النوع', render: r => r.is_complement ? '<span class="tag new">مكمل</span>' : '<span class="tag salem">أساسي</span>' },
         { key: 'weight', label: 'وزن الوحدة', render: weightCell },
         { key: 'pack', label: 'التعبئة', render: packCell },
         { key: 'salem', label: 'سليم', render: r => qtyCell(r, 'qty_salem', 'salem', 'سليم') },
@@ -218,6 +221,9 @@ register('items', {
           <div class="field"><label>رصيد افتتاحي سليم</label><input id="f-salem" inputmode="numeric" value="${esc(row?.qty_salem || '')}" ${locked ? 'disabled' : ''}></div>
           <div class="field"><label>رصيد افتتاحي تالف</label><input id="f-talef" inputmode="numeric" value="${esc(row?.qty_talef || '')}" ${locked ? 'disabled' : ''}></div>
           <div class="field"><label>رصيد افتتاحي محرز</label><input id="f-muharraz" inputmode="numeric" value="${esc(row?.qty_muharraz || '')}" ${locked ? 'disabled' : ''}></div>
+          <div class="field full"><label style="display:flex;align-items:center;gap:8px;margin:0;font-weight:600;cursor:pointer">
+            <input type="checkbox" id="f-complement" ${row?.is_complement ? 'checked' : ''} style="width:auto;flex:none;accent-color:#2450c8">
+            صنف مكمل — لا يظهر في جرد المخزون (مثل أغطية العبوات)</label></div>
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(row?.notes || '')}"></div>
         </div>
         ${locked

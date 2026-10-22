@@ -23,6 +23,11 @@ function migrate(d) {
   add('qty_salem', 'qty_salem INTEGER NOT NULL DEFAULT 0');
   add('qty_talef', 'qty_talef INTEGER NOT NULL DEFAULT 0');
   add('qty_muharraz', 'qty_muharraz INTEGER NOT NULL DEFAULT 0');
+  // الصنف المكمل (أغطية ونحوها): يُستبعد من جرد المخزون، وتُعلَّم الأغطية الحالية تلقائياً
+  if (!cols.includes('is_complement')) {
+    d.exec('ALTER TABLE items ADD COLUMN is_complement INTEGER NOT NULL DEFAULT 0');
+    d.exec("UPDATE items SET is_complement=1 WHERE unit_name='غطاء'");
+  }
   // سندات التالف: تخزين توزيع الخصم (تالف/سليم) لعكس الأثر بدقة عند التعديل والإلغاء
   const scrapCols = d.prepare('PRAGMA table_info(scrap_movements)').all().map(c => c.name);
   const scrapAdd = (name, sql) => { if (!scrapCols.includes(name)) d.exec(`ALTER TABLE scrap_movements ADD COLUMN ${sql}`); };

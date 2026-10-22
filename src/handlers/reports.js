@@ -25,6 +25,7 @@ module.exports = function register(ipcMain) {
         COALESCE(SUM(m.qty_in_pieces),0) - COALESCE(SUM(m.qty_out_pieces),0) balance_pieces,
         COALESCE(SUM(m.weight_in_kg),0) - COALESCE(SUM(m.weight_out_kg),0) balance_kg
       FROM items i LEFT JOIN stock_moves m ON m.item_id = i.id${joinWh}
+      WHERE i.is_complement = 0
       GROUP BY i.id ORDER BY i.code`).all(...params);
     return rows.map(r => ({ ...r, balance_label: formatQty(r.balance_pieces, r) }));
   });

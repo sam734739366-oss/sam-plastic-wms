@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS items (
   bale_size TEXT,
   bale_condition TEXT,
   bale_mixed INTEGER NOT NULL DEFAULT 0,
+  is_complement INTEGER NOT NULL DEFAULT 0,
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );

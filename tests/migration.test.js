@@ -28,6 +28,7 @@ function makeOldDb() {
   d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('admin','المدير','x','manager')").run();
   d.prepare('INSERT INTO warehouses (name) VALUES (?)').run('المخزن الرئيسي');
   d.prepare('INSERT INTO items (code, name, item_group, unit_name) VALUES (?,?,?,?)').run('001', 'عبوة 1 لتر', 2, 'عبوة');
+  d.prepare('INSERT INTO items (code, name, item_group, unit_name) VALUES (?,?,?,?)').run('002', 'غطاء قديم', 2, 'غطاء');
   d.prepare("INSERT INTO parties (name, type) VALUES (?,?)").run('عميل قديم', 'customer');
   d.prepare("INSERT INTO parties (name, type) VALUES (?,?)").run('مورد قديم', 'supplier');
   d.prepare("INSERT INTO purchases (doc_number, doc_date, party_id, status) VALUES ('P-9','2026-01-01',2,'active')").run();
@@ -48,6 +49,11 @@ test('ترحيل قاعدة قديمة: أعمدة الدفع + ترحيل ال�
   const recvCols = d.prepare('PRAGMA table_info(receive_permits)').all().map(c => c.name);
   assert.ok(invCols.includes('payment_method'));
   assert.ok(purCols.includes('payment_method'));
+  // الصنف المكمل يُضاف للقواعد القديمة وتُعلَّم الأغطية القائمة تلقائياً
+  const itemCols = d.prepare('PRAGMA table_info(items)').all().map(c => c.name);
+  assert.ok(itemCols.includes('is_complement'));
+  assert.equal(d.prepare('SELECT is_complement FROM items WHERE code=?').get('001').is_complement, 0);
+  assert.equal(d.prepare('SELECT is_complement FROM items WHERE code=?').get('002').is_complement, 1);
   // ربط الاستلام بتصريح الصرف (دورة الكراتين) يُضاف للقواعد القديمة
   assert.ok(recvCols.includes('issue_permit_id'));
   // البيانات القديمة باقية
