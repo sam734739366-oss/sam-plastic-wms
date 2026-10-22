@@ -35,14 +35,10 @@ test('جرد المخزون: أعمدة سليم/تالف/محرز تُحسب م
   assert.equal(rowAll.qty_salem, 5000);
   assert.equal(rowAll.qty_talef, 100);
   assert.equal(rowAll.qty_muharraz, 50);
-  // فلترة بمخزن الصابون (لا حركات له): أصفار في كل الأعمدة
+  // فلترة بمخزن الصابون (لا حركات له): الصنف المنتهي لا يظهر في جرد المخزن
   const soapWh = db.prepare("SELECT id FROM warehouses WHERE name='مخزن الصابون'").get().id;
   const soap = h['reports:inventory'](null, { warehouseId: soapWh });
-  const rowSoap = soap.find(r => r.id === id);
-  assert.equal(rowSoap.qty_salem, 0);
-  assert.equal(rowSoap.qty_talef, 0);
-  assert.equal(rowSoap.qty_muharraz, 0);
-  assert.equal(rowSoap.balance_pieces, 0);
+  assert.ok(!soap.find(r => r.id === id), 'الصنف صفر الكمية لا يظهر في جرد المخزن المحدد');
   // فلترة بالمخزن الرئيسي (فيه الافتتاحي): تعادل أرصدة الصنف
   const mainWh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
   const main = h['reports:inventory'](null, { warehouseId: mainWh });

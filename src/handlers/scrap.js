@@ -115,6 +115,20 @@ module.exports = function register(ipcMain) {
       if (!isCustomer) {
         const talefTake = Number(d.talef_take) || 0;
         const salemTake = Number(d.salem_take) || 0;
+        // الخصم من سلات المخزن المحدد نفسه (لا من عداد الصنف الإجمالي) حتى لا يُسحب
+        // من مخزن لا يملك الرصيد في السلة المطلوبة.
+        // عند التعديل: حركات السند القديم ما زالت في الجدول حتى يُكتب عكسها، لذا إن كان
+        // السند في نفس المخزن يُعاد الخصم القديم إلى الرصيد المتاح قبل الفحص.
+        const bal = getBalance(db, item.id, doc.warehouse_id);
+        const sameWh = before && !Number(before.is_customer) && Number(before.warehouse_id) === Number(doc.warehouse_id);
+        const availTalef = bal.qty_talef + (sameWh ? (Number(before.talef_take) || 0) : 0);
+        const availSalem = bal.qty_salem + (sameWh ? (Number(before.salem_take) || 0) : 0);
+        if (availTalef < talefTake) {
+          throw new Error(`الرصيد التالف غير كافٍ للصنف ${item.code} في المخزن المحدد (المتوفر ${availTalef} حبة)`);
+        }
+        if (availSalem < salemTake) {
+          throw new Error(`الرصيد السليم غير كافٍ للصنف ${item.code} في المخزن المحدد (المتوفر ${availSalem} حبة)`);
+        }
         const pushOut = (qty, bucket) => {
           if (qty > 0) moves.push({
             item_id: item.id, warehouse_id: doc.warehouse_id,
@@ -132,8 +146,6 @@ module.exports = function register(ipcMain) {
             bucket: doc.disposition === 'to_recycled' ? 'muharraz' : 'salem', notes: doc.notes,
           });
         } else { // sold_scrap / to_supplier: خروج نهائي
-          const bal = getBalance(db, item.id, doc.warehouse_id);
-          if (bal.balance_pieces < pieces) throw new Error(`الرصيد غير كافٍ للصنف ${item.code} (المتوفر ${bal.balance_pieces} حبة)`);
           pushOut(talefTake, 'talef');
           pushOut(salemTake, 'salem');
         }

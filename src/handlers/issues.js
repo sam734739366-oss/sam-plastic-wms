@@ -102,8 +102,8 @@ module.exports = function register(ipcMain) {
           cartonIds.length ? JSON.stringify(cartonIds) : null, it.notes || null);
       }
       writeMoves(db, 'issue', id, number, doc.doc_date, moves, userId);
-      // أرصدة سليم/تالف/محرز: صرف المصنع ينقص السليم (وعكس القديم عند التعديل)
-      if (oldItems.length) applySalemDelta(db, oldItems, 1);
+      // أرصدة سليم/تالف/محرز: صرف المصنع ينقص السليم (وعكس القديم عند التعديل — وخام العميل بلا أثر مخزني)
+      if (oldItems.length && before.source === 'own') applySalemDelta(db, oldItems, 1);
       applySalemDelta(db, moves, -1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'issue_permit', id, before, doc);
@@ -124,7 +124,7 @@ module.exports = function register(ipcMain) {
     withTransaction(db, () => {
       db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);
       voidDoc(db, 'issue', id, userId);
-      applySalemDelta(db, oldItems, 1);
+      if (before.source === 'own') applySalemDelta(db, oldItems, 1);
       db.prepare(`UPDATE issue_permits SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'issue_permit', id, before, null);

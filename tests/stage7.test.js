@@ -46,7 +46,10 @@ test('reports:inventory returns balances with labels and warehouse filter', () =
   assert.equal(row.balance_pieces, 1500);
   assert.ok(row.balance_label.includes('عبوة'));
   const wh = h['reports:inventory'](null, { warehouseId: 2 });
-  assert.equal(wh.find(r => r.id === 1).balance_pieces, 0);
+  assert.ok(!wh.find(r => r.id === 1), 'الصنف صفر الكمية لا يظهر في جرد المخزن المحدد');
+  // الصنف ذو الرصيد في المخزن يظهر
+  stockIn(db, h, 2, 2, 300);
+  assert.equal(h['reports:inventory'](null, { warehouseId: 2 }).find(r => r.id === 2).balance_pieces, 300);
 });
 
 test('reports:inventory excludes complement items', () => {

@@ -203,7 +203,7 @@ test('scrap sold_scrap checks warehouse balance and deducts buckets', () => {
   assert.throws(() => h['scrap:save'](null, {
     doc_number: '2', doc_date: '2026-10-18', item_id: 1, disposition: 'sold_scrap',
     warehouse_id: 2, pieces: 9999
-  }, 1), /الرصيد غير كافٍ/);
+  }, 1), /الرصيد .*غير كافٍ/);
 });
 
 test('scrap customer waste records only and appears in tolling balance', () => {

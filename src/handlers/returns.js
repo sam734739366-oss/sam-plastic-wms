@@ -126,7 +126,8 @@ module.exports = function register(ipcMain) {
         // عكس الأثر القديم كاملاً قبل تطبيق الجديد
         voidDoc(db, isSale ? 'sale_return' : 'purchase_return', id, userId);
         const oldKey = isSale ? saleBucketOf(db, before.invoice_id) : 'salem';
-        if (oldKey) applyBucketDelta(db, oldItems, -1, oldKey);
+        // مرتجع البيع كان +سلة فالعكس خصم، ومرتجع الشراء كان −سليم فالعكس إضافة
+        if (oldKey) applyBucketDelta(db, oldItems, isSale ? -1 : 1, oldKey);
         ledger.voidDoc(db, isSale ? 'sale_return' : 'purchase_return', id);
         db.prepare(`UPDATE ${table} SET doc_number=?, doc_date=?, ${refCol}=?, party_id=?, payment_method=?, notes=? WHERE id=?`)
           .run(number, doc.doc_date, isSale ? doc.invoice_id : doc.purchase_id,

@@ -84,8 +84,8 @@ module.exports = function register(ipcMain) {
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, it.notes || null);
       }
       writeMoves(db, 'receive', id, number, doc.doc_date, moves, userId);
-      // استلام إنتاج المصنع يزيد السليم (وعكس القديم عند التعديل)
-      if (oldItems.length) applySalemDelta(db, oldItems, -1);
+      // استلام إنتاج المصنع يزيد السليم (وعكس القديم عند التعديل — وخام العميل بلا أثر مخزني)
+      if (oldItems.length && before.source === 'own') applySalemDelta(db, oldItems, -1);
       applySalemDelta(db, moves, 1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'receive_permit', id, before, doc);

@@ -2,6 +2,7 @@ const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const ledger = require('../ledger');
 
 function customerBalance(db, partyId) {
   return db.prepare(`SELECT
@@ -176,6 +177,17 @@ module.exports = function register(ipcMain) {
           const price = Number(it.unit_price) || 0;
           insInv.run(invoiceId, item.id, 1, qty, 'حبة', Math.round(qty), 0, price, qty * price, it.notes || null);
         }
+        // الأثر المحاسبي لفواتير الأجرة: ذمة على العميل (وإن كانت نقدية فقبض فوري)
+        const invTotal = db.prepare(`SELECT COALESCE(SUM(total_price),0) t FROM invoice_items WHERE invoice_id=?`).get(invoiceId).t;
+        ledger.invoiceEffect(db, {
+          docType: 'invoice',
+          doc: {
+            id: invoiceId, doc_number: inv.doc_number, doc_date: inv.doc_date || doc.doc_date,
+            party_id: doc.party_id, invoice_type: 'blowing_fee',
+            payment_method: inv.payment_method || 'credit',
+          },
+          total: invTotal, userId,
+        });
       }
       if (id) {
         db.prepare('DELETE FROM customer_delivery_items WHERE delivery_id=?').run(id);

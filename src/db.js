@@ -52,10 +52,21 @@ function migrate(d) {
     d.exec(`UPDATE stock_moves SET bucket='salem' WHERE doc_type='scrap' AND doc_id IN (SELECT id FROM scrap_movements WHERE disposition='to_stock') AND bucket IS NULL`);
     d.exec(`UPDATE stock_moves SET bucket='talef' WHERE doc_type='scrap' AND bucket IS NULL AND doc_id IN (SELECT id FROM scrap_movements WHERE talef_take > 0)`);
     d.exec(`UPDATE stock_moves SET bucket='salem' WHERE bucket IS NULL`);
-    // إعادة بناء الأرصدة الافتتاحية كصفوف مفصولة حسب السلة (سليم/تالف/محرز)
+    // إعادة بناء الأرصدة الافتتاحية كصفوف مفصولة حسب السلة (سليم/تالف/محرز).
+    // في القواعد القديمة كان الافتتاح صفاً واحداً لكل صنف، وعدادات الأصناف تشمل
+    // أثر العمليات المنفذة (شراء/صرف/بيع...). لذلك يُحسب الافتتاح لكل سلة كالتالي:
+    //   الافتتاح = العداد − صافي حركات السلة غير الافتتاحية
+    // حتى لا يُضاعَف أثر العمليات في حركات المخزون ويبقى الجرد مطابقاً للعداد.
     const wh0 = d.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get();
     if (wh0) {
       d.prepare("DELETE FROM stock_moves WHERE doc_type='opening'").run();
+      const netRows = d.prepare(`SELECT item_id, bucket,
+          COALESCE(SUM(qty_in_pieces),0) - COALESCE(SUM(qty_out_pieces),0) net
+        FROM stock_moves WHERE doc_type != 'opening' GROUP BY item_id, bucket`).all();
+      const netOf = (itemId, bucket) => {
+        const r = netRows.find(x => x.item_id === itemId && x.bucket === bucket);
+        return r ? r.net : 0;
+      };
       const items0 = d.prepare('SELECT * FROM items').all();
       const insOpen0 = d.prepare(`INSERT INTO stock_moves
         (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
@@ -63,11 +74,8 @@ function migrate(d) {
         VALUES ('opening',?,?,?,?,?,?,0,?,0,?,?)`);
       const today0 = new Date().toISOString().slice(0, 10);
       for (const it of items0) {
-        for (const [key, qty, label] of [
-          ['salem', Number(it.qty_salem) || 0, 'سليم'],
-          ['talef', Number(it.qty_talef) || 0, 'تالف'],
-          ['muharraz', Number(it.qty_muharraz) || 0, 'محرز'],
-        ]) {
+        for (const [key, label] of [['salem', 'سليم'], ['talef', 'تالف'], ['muharraz', 'محرز']]) {
+          const qty = (Number(it[`qty_${key}`]) || 0) - netOf(it.id, key);
           if (qty > 0) insOpen0.run(it.id, `افتتاحي-${it.code}`, today0, it.id, wh0.id,
             qty, qty * (Number(it.weight_grams) || 0) / 1000, key, `رصيد افتتاحي (${label})`);
         }
@@ -143,6 +151,47 @@ function migrate(d) {
   }
 }
 
+// إصلاح لمرة واحدة للأرصدة الافتتاحية في القواعد التي تضررت من ترحيل قديم أعاد بناءها
+// من عدادات تشمل أثر العمليات المنفذة (شراء/صرف/بيع...).
+// الافتتاح الصحيح لكل صنف × سلة = العداد − صافي حركات السلة غير الافتتاحية.
+// تُحذف صفوف الافتتاح وتُعاد كتابتها بالقيم المصححة (الوزن = الكمية × وزن الحبة).
+function repairOpenings(d) {
+  const wh0 = d.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get();
+  if (!wh0) return { changed: [] };
+  const oldRows = d.prepare(`SELECT sm.item_id, sm.bucket, sm.qty_in_pieces - sm.qty_out_pieces qty
+    FROM stock_moves sm WHERE sm.doc_type='opening'`).all();
+  const oldOf = (itemId, bucket) => oldRows
+    .filter(r => r.item_id === itemId && r.bucket === bucket)
+    .reduce((s, r) => s + r.qty, 0);
+  const netRows = d.prepare(`SELECT item_id, bucket,
+      COALESCE(SUM(qty_in_pieces),0) - COALESCE(SUM(qty_out_pieces),0) net
+    FROM stock_moves WHERE doc_type != 'opening' GROUP BY item_id, bucket`).all();
+  const netOf = (itemId, bucket) => {
+    const r = netRows.find(x => x.item_id === itemId && x.bucket === bucket);
+    return r ? r.net : 0;
+  };
+  const changes = [];
+  const items = d.prepare('SELECT * FROM items').all();
+  const today = new Date().toISOString().slice(0, 10);
+  withTransaction(d, () => {
+    d.prepare("DELETE FROM stock_moves WHERE doc_type='opening'").run();
+    const ins = d.prepare(`INSERT INTO stock_moves
+      (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+       qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, bucket, notes)
+      VALUES ('opening',?,?,?,?,?,?,0,?,0,?,?)`);
+    for (const it of items) {
+      for (const [key, label] of [['salem', 'سليم'], ['talef', 'تالف'], ['muharraz', 'محرز']]) {
+        const qty = (Number(it[`qty_${key}`]) || 0) - netOf(it.id, key);
+        const old = oldOf(it.id, key);
+        if (qty !== old) changes.push({ item_id: it.id, item_code: it.code, bucket: key, old_qty: old, new_qty: qty });
+        if (qty > 0) ins.run(it.id, `افتتاحي-${it.code}`, today, it.id, wh0.id,
+          qty, qty * (Number(it.weight_grams) || 0) / 1000, key, `رصيد افتتاحي (${label})`);
+      }
+    }
+  });
+  return { changed: changes };
+}
+
 function getDb() {
   if (db) return db;
   const dir = dataDir();
@@ -191,4 +240,4 @@ function seed(d) {
   if (!s.get('currency')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('currency', 'YER');
 }
 
-module.exports = { getDb, setDb, withTransaction, migrate, dataDir };
+module.exports = { getDb, setDb, withTransaction, migrate, repairOpenings, dataDir };

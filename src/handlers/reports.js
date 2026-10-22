@@ -14,7 +14,13 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     const params = [];
     let joinWh = '';
-    if (filters.warehouseId) { joinWh = ' AND m.warehouse_id = ?'; params.push(filters.warehouseId); }
+    // عند فلترة مخزن معين: الأصناف المنتهية (رصيد صفر في هذا المخزن) لا تظهر
+    let havingWh = '';
+    if (filters.warehouseId) {
+      joinWh = ' AND m.warehouse_id = ?';
+      params.push(filters.warehouseId);
+      havingWh = ' HAVING balance_pieces <> 0';
+    }
     const rows = db.prepare(`SELECT i.id, i.code, i.name, i.unit_name, i.weight_grams, i.pieces_per_carton,
         i.pieces_per_shadda, i.pieces_per_bag,
         COALESCE(SUM(CASE WHEN m.bucket='salem' THEN m.qty_in_pieces - m.qty_out_pieces ELSE 0 END),0) qty_salem,
@@ -26,7 +32,7 @@ module.exports = function register(ipcMain) {
         COALESCE(SUM(m.weight_in_kg),0) - COALESCE(SUM(m.weight_out_kg),0) balance_kg
       FROM items i LEFT JOIN stock_moves m ON m.item_id = i.id${joinWh}
       WHERE i.is_complement = 0
-      GROUP BY i.id ORDER BY i.code`).all(...params);
+      GROUP BY i.id${havingWh} ORDER BY i.code`).all(...params);
     return rows.map(r => ({ ...r, balance_label: formatQty(r.balance_pieces, r) }));
   });
 
