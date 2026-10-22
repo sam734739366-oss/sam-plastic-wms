@@ -289,6 +289,22 @@ body {
     radial-gradient(700px 420px at 8% 110%, rgba(31, 74, 190, .09), transparent 55%),
     var(--bg);
 }
+/* الصفحة الرئيسية الثابتة: تمتلئ من القائمة الجانبية، والنوافذ المنبثقة تطفو فوقها */
+.screen {
+  position: absolute; inset: 0; overflow: auto; padding: 24px 26px;
+  scrollbar-gutter: stable;
+}
+/* زر الشرح العائم للصفحة الثابتة الحالية */
+.page-help {
+  position: fixed; bottom: 62px; left: 18px; z-index: 60;
+  width: 46px; height: 46px; border-radius: 50%;
+  background: linear-gradient(180deg, #1d2f66, #101d42);
+  color: #ffd682; border: 1px solid rgba(255, 255, 255, .22);
+  font-size: 20px; font-weight: 800; cursor: pointer; font-family: inherit;
+  box-shadow: 0 8px 20px rgba(2, 6, 23, .35);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.page-help:hover { transform: translateY(-2px); box-shadow: 0 12px 26px rgba(2, 6, 23, .45); }
 .win {
   position: absolute; display: flex; flex-direction: column;
   background: #fff; border-radius: 13px; overflow: hidden;
@@ -448,6 +464,8 @@ body {
   border-top: 1px solid rgba(255, 255, 255, .1);
   overflow-x: auto; overflow-y: hidden;
 }
+/* الصفحات الرئيسية ثابتة، فلا يظهر الشريط إلا عند وجود نوافذ منبثقة أو دليل مفتوح */
+.taskbar:not(.has-wins) { display: none; }
 .taskbar::-webkit-scrollbar { height: 4px; }
 .taskbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .18); border-radius: 3px; }
 .tb-btn {

@@ -1,8 +1,9 @@
 // ===== مدير النوافذ الداخلي =====
-// كل صفحة تُفتح كنافذة مستقلة فوق سطح المكتب، بأزرار تصغير/تكبير/إغلاق،
-// ولكل نافذة زر في شريط المهام السفلي يبقى ظاهراً باسمها عند تصغيرها.
-// النوافذ المنبثقة (الفواتير والسندات وغيرها) تُفتح بنفس الطريقة،
-// ويمكن فتح أكثر من منبثقة في نفس الوقت.
+// الصفحات الرئيسية ثابتة داخل البرنامج (#screen) ولا تمر من هنا.
+// هذا المدير يفتح النوافذ المنبثقة فقط (الفواتير والسندات والنماذج) فوقها،
+// بأزرار تصغير/تكبير/إغلاق، ولكل نافذة زر في شريط المهام السفلي يبقى ظاهراً
+// باسمها عند تصغيرها، ويمكن فتح أكثر من منبثقة في نفس الوقت.
+// كما يفتح دليل المستخدم كنافذة مستقلة من زر الدليل في الصفحة الرئيسية.
 import { getDef } from './router.js';
 import { esc, explainDialog, setPopupOpener } from './ui.js';
 import { helpFor } from './help.js';
@@ -19,6 +20,11 @@ export function initWM(desktop, taskbar) {
 }
 
 function all() { return [...wins.values(), ...pops.values()]; }
+
+// يُظهر شريط المهام فقط عند وجود نوافذ (منبثقات أو دليل) مفتوحة
+function syncTaskbar() {
+  if (taskbarEl) taskbarEl.classList.toggle('has-wins', taskbarEl.children.length > 0);
+}
 
 function placeNew(el, { small = false } = {}) {
   const dw = desktopEl.clientWidth, dh = desktopEl.clientHeight;
@@ -90,6 +96,7 @@ function closeWin(win) {
   el.remove();
   win.tb.remove();
   win.map.delete(win.name);
+  syncTaskbar();
   const t = topVisible();
   if (t) focusWin(t);
   else window.dispatchEvent(new CustomEvent('wm:focus', { detail: { name: null } }));
@@ -185,6 +192,7 @@ export function openWindow(name, opts = {}) {
   wins.set(name, win);
   desktopEl.appendChild(el);
   taskbarEl.appendChild(tb);
+  syncTaskbar();
   placeNew(el);
   cascade += 1;
 
@@ -235,6 +243,7 @@ export function openPopup({ title, bodyHtml, buttons = [] }) {
   pops.set(name, win);
   desktopEl.appendChild(el);
   taskbarEl.appendChild(tb);
+  syncTaskbar();
   placeNew(el, { small: true });
   cascade += 1;
 

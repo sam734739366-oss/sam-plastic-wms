@@ -1,11 +1,16 @@
+// ===== مسار الصفحات =====
+// الصفحات الرئيسية تُعرض دائماً داخل منطقة ثابتة (#screen) في قلب البرنامج —
+// تغيير الاختيار من القائمة يستبدل المحتوى ولا يفتح نوافذ.
+// النوافذ (بأزرار التصغير والتكبير والإغلاق) مخصصة للمنبثقات فقط: الفواتير
+// والسندات والنماذج ودليل المستخدم، وتديرها wm.js بشكل مستقل.
 const screens = {};
-let opener = null;
+let current = 'dashboard';
 export function register(name, def) { screens[name] = def; }
 export function getDef(name) { return screens[name]; }
-export function setOpener(fn) { opener = fn; }
+export function currentScreen() { return current; }
 export function go(name) {
+  current = name;
   document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.screen === name));
-  if (opener) { opener(name); return; }
   const el = document.getElementById('screen');
   if (!el) return;
   el.innerHTML = '';

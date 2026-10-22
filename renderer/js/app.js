@@ -1,8 +1,9 @@
 import { currentUser } from './api.js';
-import { go, setOpener } from './router.js';
-import { initWM, openWindow } from './wm.js';
+import { go, currentScreen } from './router.js';
+import { initWM } from './wm.js';
 import { setCurrency } from './fmt.js';
-import { toast } from './ui.js';
+import { explainDialog } from './ui.js';
+import { helpFor } from './help.js';
 
 // ===== تحسين خانات التاريخ =====
 // كروميوم يرسم تلميح التاريخ الفارغ (يوم/شهر/سنة) بأحرف معكوسة لا يتأثر بأي CSS،
@@ -56,7 +57,6 @@ const ROLE_SCREENS = {
   accounts: ['dashboard', 'parties', 'payments', 'statements', 'reports', 'audit'],
 };
 const allowed = (screen) => {
-  if (screen === 'guide') return true; // دليل المستخدم متاح لكل الأدوار
   const list = ROLE_SCREENS[u.role];
   if (!list) return true;
   return list.includes(screen);
@@ -78,15 +78,18 @@ document.querySelectorAll('#nav .nav-group').forEach(g => {
 });
 
 initWM(document.getElementById('desktop'), document.getElementById('taskbar'));
-setOpener((name) => {
-  if (!allowed(name)) { toast('هذه الشاشة غير متاحة لدورك الحالي', 'err'); return; }
-  openWindow(name, { refresh: true });
-});
-window.addEventListener('wm:focus', (e) => {
-  const name = e.detail.name;
-  if (name && String(name).startsWith('pop:')) return;
-  document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.screen === name));
-});
+
+// زر شرح عائم أسفل يسار الشاشة: يشرح الصفحة الرئيسية الثابتة الحالية
+// (الشروحات تُعرض كنافذة منبثقة بأزرار تصغير/تكبير/إغلاق).
+const pageHelp = document.createElement('button');
+pageHelp.className = 'page-help';
+pageHelp.title = 'شرح العملية';
+pageHelp.textContent = '؟';
+pageHelp.onclick = () => {
+  const h = helpFor(currentScreen());
+  explainDialog(h.title, h.lines);
+};
+document.body.appendChild(pageHelp);
 
 import './screens/dashboard.js';
 import './screens/guide.js';
