@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, implicationsDialog, renderTable, openModal, esc , itemCombo} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtNum, today } from '../fmt.js';
 
@@ -54,7 +54,8 @@ register('receives', {
           <p style="line-height:2">
             <b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>المصدر:</b> ${doc.source === 'customer' ? 'خام عميل' : 'إنتاج المصنع'}
             ${doc.party_name ? `&nbsp; <b>العميل:</b> ${esc(doc.party_name)}` : ''}<br>
-            <b>المكينة:</b> ${esc(doc.machine_name || '—')} &nbsp; <b>الوردية:</b> ${esc(doc.shift_name || '—')} &nbsp; <b>المستلم:</b> ${esc(doc.receiver_name || '—')}</p>
+            <b>المكينة:</b> ${esc(doc.machine_name || '—')} &nbsp; <b>الوردية:</b> ${esc(doc.shift_name || '—')} &nbsp; <b>المستلم:</b> ${esc(doc.receiver_name || '—')}<br>
+            ${doc.issue_number ? `<b>تصريح الصرف المرتبط:</b> <span dir="ltr">${esc(doc.issue_number)}</span>` : ''}</p>
           <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
             <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td>
@@ -89,14 +90,16 @@ register('receives', {
     }
 
     async function form(doc) {
-      const [items, parties, machines, shifts, warehouses] = await Promise.all([
+      const [items, parties, machines, shifts, warehouses, issues] = await Promise.all([
         api.invoke('items:list'),
         api.invoke('parties:list', null),
         api.invoke('machines:list'),
         api.invoke('shifts:list'),
         api.invoke('warehouses:list'),
+        api.invoke('issues:list'),
       ]);
       const customers = parties.filter(p => p.type === 'customer' || p.type === 'both');
+      const activeIssues = issues.filter(p => p.status !== 'void');
       const suggest = doc ? null : await api.invoke('receives:suggest');
 
       const back = openModal(doc ? `تعديل تصريح استلام ${esc(doc.doc_number)}` : 'تصريح استلام جديد', `
@@ -112,6 +115,11 @@ register('receives', {
             <select id="f-party"><option value="">— اختر العميل —</option>
               ${customers.map(p => `<option value="${p.id}" ${doc && doc.party_id === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
             </select></div>
+          <div class="field" id="w-issue"><label>تصريح الصرف المرتبط</label>
+            <select id="f-issue"><option value="">— بدون (اختياري) —</option>
+              ${activeIssues.map(p => `<option value="${p.id}" ${doc && doc.issue_permit_id === p.id ? 'selected' : ''}>${esc(p.doc_number)} — ${esc(p.doc_date)}${p.machine_name ? ' (' + esc(p.machine_name) + ')' : ''}</option>`).join('')}
+            </select>
+            <span class="muted" style="font-size:11px">يربط الاستلام بدورة الكراتين لمتابعة النقص والزيادة</span></div>
           <div class="field"><label>المكينة</label>
             <select id="f-machine"><option value="">—</option>
               ${machines.map(m => `<option value="${m.id}" ${doc && doc.machine_id === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
@@ -142,13 +150,14 @@ register('receives', {
               quantity: parseFloat(r.querySelector('.p-qty').value) || 0,
               unit: r.querySelector('.p-unit').value,
               notes: r.querySelector('.p-notes').value,
-            }));
+            })).filter(x => x.item_id);
             await api.invoke('receives:save', {
               id: doc ? doc.id : null,
               doc_number: b.querySelector('#f-num').value,
               doc_date: b.querySelector('#f-date').value,
               source: b.querySelector('#f-source').value,
               party_id: b.querySelector('#f-party').value ? Number(b.querySelector('#f-party').value) : null,
+              issue_permit_id: b.querySelector('#f-issue').value ? Number(b.querySelector('#f-issue').value) : null,
               machine_id: b.querySelector('#f-machine').value ? Number(b.querySelector('#f-machine').value) : null,
               shift_id: b.querySelector('#f-shift').value ? Number(b.querySelector('#f-shift').value) : null,
               receiver_name: b.querySelector('#f-receiver').value,
@@ -165,6 +174,7 @@ register('receives', {
       const isCustomer = () => back.querySelector('#f-source').value === 'customer';
       const applySource = () => {
         back.querySelector('#w-party').style.display = isCustomer() ? '' : 'none';
+        back.querySelector('#w-issue').style.display = isCustomer() ? 'none' : '';
       };
       back.querySelector('#f-source').onchange = applySource;
 
@@ -181,7 +191,7 @@ register('receives', {
         const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td class="p-item-td"></td>
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
@@ -189,6 +199,8 @@ register('receives', {
           <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
           <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
+        const combo = itemCombo(items, () => row.querySelector('.p-item').dispatchEvent(new Event('change')));
+        row.querySelector('.p-item-td').appendChild(combo.box);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
 
         const itemSel = row.querySelector('.p-item');
@@ -221,7 +233,7 @@ register('receives', {
         itemSel.onchange = refresh;
         unitSel.onchange = refresh;
         qty.oninput = refresh;
-        if (data.item_id) itemSel.value = String(data.item_id);
+        if (data.item_id) combo.setValue(data.item_id);
         if (data.warehouse_id) row.querySelector('.p-wh').value = String(data.warehouse_id);
         refresh();
       }

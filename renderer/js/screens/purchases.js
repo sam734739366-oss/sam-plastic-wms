@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, implicationsDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, implicationsDialog, renderTable, openModal, esc , itemCombo} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -21,6 +21,7 @@ register('purchases', {
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
         { key: 'party_name', label: 'المورد', render: r => r.party_name || '—' },
+        { key: 'payment_method', label: 'الدفع', render: r => r.payment_method === 'cash' ? '<span class="tag muharraz">نقدي</span>' : '<span class="tag">آجل</span>' },
         { key: 'items_count', label: 'البنود' },
         { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
         { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغاة</span>' : '<span class="tag salem">نشطة</span>' },
@@ -49,7 +50,8 @@ register('purchases', {
       try {
         const doc = await api.invoke('purchases:get', id);
         openModal(`فاتورة شراء ${esc(doc.doc_number)}`, `
-          <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>المورد:</b> ${esc(doc.party_name || '—')}</p>
+          <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>المورد:</b> ${esc(doc.party_name || '—')}
+            &nbsp; <b>طريقة الدفع:</b> ${doc.payment_method === 'cash' ? 'نقدي' : 'آجل'}</p>
           <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th><th>السعر</th><th>الإجمالي</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
             <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td><td>${fmtNum(it.weight_kg)}</td>
@@ -88,7 +90,7 @@ register('purchases', {
           toast('لا يمكن إلغاء الفاتورة — كراتين صُرفت للإنتاج، ألغِ تصريح الصرف أولاً', 'err');
           return;
         }
-        const lines = ['سيُلغى أثر الفاتورة على المخزون وأرصدة سليم نهائياً.'];
+        const lines = ['سيُلغى أثر الفاتورة على المخزون وأرصدة سليم نهائياً.', 'وسيُعكس أثرها المحاسبي: تُشطب ذمة المورد أو الدفع النقدي المسجل لها.'];
         if (doc.cartons.length) lines.push(`ستُحذف الكراتين: ${doc.cartons.map(c => c.carton_number).join(' ، ')}`);
         if (!(await implicationsDialog('إلغاء فاتورة شراء', lines))) return;
         await api.invoke('purchases:void', id, currentUser().id);
@@ -114,6 +116,11 @@ register('purchases', {
             <select id="f-party"><option value="">— بدون مورد —</option>
               ${suppliers.map(p => `<option value="${p.id}" ${doc && doc.party_id === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
             </select></div>
+          <div class="field"><label>طريقة الدفع *</label>
+            <select id="f-pay">
+              <option value="credit" ${doc && doc.payment_method !== 'cash' ? 'selected' : ''}>آجل (يُسجل ذمة على المصنع للمورد)</option>
+              <option value="cash" ${doc && doc.payment_method === 'cash' ? 'selected' : ''}>نقدي (يُدفع فوراً من النقدية)</option>
+            </select></div>
           <div class="field"><label>ملاحظات</label><input id="f-notes" value="${esc(doc ? doc.notes || '' : '')}"></div>
         </div>
         <table class="doc-lines">
@@ -138,12 +145,13 @@ register('purchases', {
               unit_price: parseFloat(r.querySelector('.p-price').value) || null,
               notes: r.querySelector('.p-notes').value,
               carton_prefix: r.querySelector('.p-prefix') ? r.querySelector('.p-prefix').value : '',
-            }));
+            })).filter(x => x.item_id);
             await api.invoke('purchases:save', {
               id: doc ? doc.id : null,
               doc_number: b.querySelector('#f-num').value,
               doc_date: b.querySelector('#f-date').value,
               party_id: b.querySelector('#f-party').value ? Number(b.querySelector('#f-party').value) : null,
+              payment_method: b.querySelector('#f-pay').value,
               notes: b.querySelector('#f-notes').value,
               items: itemsData,
             }, currentUser().id);
@@ -168,7 +176,7 @@ register('purchases', {
         const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td class="p-item-td"></td>
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
@@ -179,6 +187,8 @@ register('purchases', {
           <td><input class="p-prefix" placeholder="مثل K-" value="${esc(data.carton_prefix || '')}"></td>
           <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
+        const combo = itemCombo(items, () => row.querySelector('.p-item').dispatchEvent(new Event('change')));
+        row.querySelector('.p-item-td').appendChild(combo.box);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
 
         const itemSel = row.querySelector('.p-item');
@@ -215,7 +225,7 @@ register('purchases', {
         unitSel.onchange = update;
         qty.oninput = update;
         price.oninput = update;
-        if (data.item_id) itemSel.value = String(data.item_id);
+        if (data.item_id) combo.setValue(data.item_id);
         if (data.warehouse_id) row.querySelector('.p-wh').value = String(data.warehouse_id);
         refresh();
       }

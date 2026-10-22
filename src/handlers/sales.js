@@ -3,6 +3,7 @@ const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
 const { writeMoves, voidDoc, getBalance, applyBucketDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const ledger = require('../ledger');
 
 const TYPE_LABEL = { sale: 'بيع', scrap: 'خردة', blowing_fee: 'أجرة نفخ' };
 // أثر الفاتورة على السلات: بيع يخصم السليم، خردة تخصم التالف، أجرة نفخ بلا أثر
@@ -46,6 +47,7 @@ module.exports = function register(ipcMain) {
     if (!doc.items || doc.items.length === 0) throw new Error('أضف بنداً واحداً على الأقل');
     if (!TYPE_LABEL[doc.invoice_type]) throw new Error('نوع الفاتورة غير صالح');
     if (!checkDocNumber(db, 'invoices', number, doc.id)) throw new Error('رقم الفاتورة مكرر');
+    const paymentMethod = doc.payment_method === 'cash' ? 'cash' : 'credit';
     const isNew = !doc.id;
     const before = isNew ? null : db.prepare('SELECT * FROM invoices WHERE id=?').get(doc.id);
     let id = doc.id;
@@ -54,14 +56,14 @@ module.exports = function register(ipcMain) {
       if (id) {
         oldItems = db.prepare('SELECT * FROM invoice_items WHERE invoice_id=?').all(id);
         db.prepare('DELETE FROM invoice_items WHERE invoice_id=?').run(id);
-        db.prepare(`UPDATE invoices SET doc_number=?, doc_date=?, party_id=?, invoice_type=?, driver_name=?, car_number=?, notes=? WHERE id=?`)
+        db.prepare(`UPDATE invoices SET doc_number=?, doc_date=?, party_id=?, invoice_type=?, driver_name=?, car_number=?, notes=?, payment_method=? WHERE id=?`)
           .run(number, doc.doc_date, doc.party_id || null, doc.invoice_type,
-            doc.driver_name || null, doc.car_number || null, doc.notes || null, id);
+            doc.driver_name || null, doc.car_number || null, doc.notes || null, paymentMethod, id);
       } else {
-        id = db.prepare(`INSERT INTO invoices (doc_number, doc_date, party_id, invoice_type, driver_name, car_number, notes, created_by)
-          VALUES (?,?,?,?,?,?,?,?)`)
+        id = db.prepare(`INSERT INTO invoices (doc_number, doc_date, party_id, invoice_type, driver_name, car_number, notes, payment_method, created_by)
+          VALUES (?,?,?,?,?,?,?,?,?)`)
           .run(number, doc.doc_date, doc.party_id || null, doc.invoice_type,
-            doc.driver_name || null, doc.car_number || null, doc.notes || null, userId).lastInsertRowid;
+            doc.driver_name || null, doc.car_number || null, doc.notes || null, paymentMethod, userId).lastInsertRowid;
       }
       const moves = [];
       const insItem = db.prepare(`INSERT INTO invoice_items
@@ -77,7 +79,7 @@ module.exports = function register(ipcMain) {
         if (doc.invoice_type !== 'blowing_fee') {
           const bal = getBalance(db, it.item_id, it.warehouse_id);
           if (bal.balance_pieces < pieces) throw new Error(`الرصيد غير كافٍ للصنف ${item.code} (المطلوب ${pieces} حبة والمتوفر ${bal.balance_pieces})`);
-          moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, notes: it.notes });
+          moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket: TYPE_BUCKET[doc.invoice_type], notes: it.notes });
         }
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, price, price * it.quantity, it.notes || null);
       }
@@ -85,6 +87,9 @@ module.exports = function register(ipcMain) {
       // أرصدة سليم/تالف: عكس أثر النوع القديم ثم تطبيق الجديد (الفاتورة تخصم)
       if (oldItems.length) applyTypeDelta(db, oldItems, 1, before.invoice_type);
       applyTypeDelta(db, moves, -1, doc.invoice_type);
+      // الأثر المحاسبي: ذمة على العميل + قبض نقدي إن كانت نقدية
+      const total = db.prepare(`SELECT COALESCE(SUM(total_price),0) t FROM invoice_items WHERE invoice_id=?`).get(id).t;
+      ledger.invoiceEffect(db, { docType: 'invoice', doc: { ...doc, id, payment_method: paymentMethod }, total, userId });
     });
     audit(db, userId, isNew ? 'create' : 'update', 'invoice', id, before, doc);
     return { id };
@@ -96,10 +101,13 @@ module.exports = function register(ipcMain) {
     if (!before) throw new Error('الفاتورة غير موجودة');
     const linked = db.prepare(`SELECT COUNT(*) c FROM customer_deliveries WHERE invoice_id=? AND status='active'`).get(id).c;
     if (linked > 0) throw new Error('لا يمكن إلغاء الفاتورة — مرتبطة بسند تسليم نشط، ألغِ التسليم أولاً');
+    const returned = db.prepare(`SELECT COUNT(*) c FROM sales_returns WHERE invoice_id=? AND status='active'`).get(id).c;
+    if (returned > 0) throw new Error('لا يمكن إلغاء الفاتورة — توجد مرتجعات نشطة عليها، ألغِ المرتجع أولاً');
     const oldItems = db.prepare('SELECT * FROM invoice_items WHERE invoice_id=?').all(id);
     withTransaction(db, () => {
       voidDoc(db, 'invoice', id, userId);
       applyTypeDelta(db, oldItems, 1, before.invoice_type);
+      ledger.voidDoc(db, 'invoice', id);
       db.prepare(`UPDATE invoices SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'invoice', id, before, null);

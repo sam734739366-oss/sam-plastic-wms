@@ -2,8 +2,14 @@ import { register } from '../router.js';
 import { api, currentUser, isManager } from '../api.js';
 import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
 
-const ROLE_LABEL = { manager: 'مدير', clerk: 'إدخال', viewer: 'عرض' };
-const ROLE_TAG = { manager: 'salem', clerk: 'new', viewer: 'muharraz' };
+const ROLE_LABEL = {
+  manager: 'مدير', clerk: 'إدخال عام', viewer: 'عرض فقط',
+  warehouse: 'مخازن', accounts: 'حسابات', sales: 'مبيعات',
+};
+const ROLE_TAG = {
+  manager: 'salem', clerk: 'new', viewer: 'muharraz',
+  warehouse: 'new', accounts: 'muharraz', sales: 'recycled',
+};
 
 register('users', {
   title: 'المستخدمون',
@@ -21,11 +27,9 @@ register('users', {
     if (addBtn) addBtn.onclick = () => edit(null, refresh);
 
     function renderTableData() {
-      const managers = rows.filter(r => r.role === 'manager').length;
-      const clerks = rows.filter(r => r.role === 'clerk').length;
-      const viewers = rows.filter(r => r.role === 'viewer').length;
-      el.querySelector('#summary').innerHTML =
-        `العدد: <b>${rows.length}</b> — مديرون: <b>${managers}</b> — إدخال: <b>${clerks}</b> — عرض: <b>${viewers}</b>`;
+      const count = (role) => rows.filter(r => r.role === role).length;
+      const parts = Object.keys(ROLE_LABEL).filter(r => count(r)).map(r => `${ROLE_LABEL[r]}: <b>${count(r)}</b>`);
+      el.querySelector('#summary').innerHTML = `العدد: <b>${rows.length}</b> — ${parts.join(' — ') || 'لا يوجد مستخدمون'}`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'username', label: 'اسم المستخدم', render: r => `<span dir="ltr">${esc(r.username)}</span>` },
         { key: 'full_name', label: 'الاسم الكامل' },
@@ -71,7 +75,10 @@ register('users', {
           <div class="field"><label>كلمة المرور ${row ? '(اتركها فارغة بدون تغيير)' : '*'}</label><input id="f-pass" type="password" dir="ltr"></div>
           <div class="field"><label>الدور</label><select id="f-role">
             <option value="manager" ${row?.role === 'manager' ? 'selected' : ''}>مدير (صلاحية كاملة)</option>
-            <option value="clerk" ${row?.role === 'clerk' ? 'selected' : ''}>إدخال (بدون حذف)</option>
+            <option value="warehouse" ${row?.role === 'warehouse' ? 'selected' : ''}>مخازن (الأصناف والمخازن والشراء والإنتاج والتالف والنقل)</option>
+            <option value="sales" ${row?.role === 'sales' ? 'selected' : ''}>مبيعات (البيع والمرتجعات والخروج والنفخ للغير)</option>
+            <option value="accounts" ${row?.role === 'accounts' ? 'selected' : ''}>حسابات (القبض والدفع والكشوفات والتقارير)</option>
+            <option value="clerk" ${row?.role === 'clerk' ? 'selected' : ''}>إدخال عام (كل المستندات)</option>
             <option value="viewer" ${row?.role === 'viewer' ? 'selected' : ''}>عرض فقط</option>
           </select></div>
         </div>`,

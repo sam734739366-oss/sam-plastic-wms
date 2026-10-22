@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, implicationsDialog, renderTable, openModal, esc, itemCombo } from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -23,6 +23,7 @@ register('sales', {
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
         { key: 'invoice_type', label: 'النوع', render: r => `<span class="tag ${r.invoice_type === 'blowing_fee' ? 'muharraz' : r.invoice_type === 'scrap' ? 'talef' : 'salem'}">${esc(TYPE_LABEL[r.invoice_type] || r.invoice_type)}</span>` },
+        { key: 'payment_method', label: 'الدفع', render: r => r.payment_method === 'cash' ? '<span class="tag muharraz">نقدي</span>' : '<span class="tag">آجل</span>' },
         { key: 'party_name', label: 'العميل', render: r => r.party_name || '—' },
         { key: 'driver_name', label: 'السائق', render: r => r.driver_name || '—' },
         { key: 'items_count', label: 'البنود' },
@@ -54,6 +55,7 @@ register('sales', {
         const doc = await api.invoke('sales:get', id);
         openModal(`فاتورة ${TYPE_LABEL[doc.invoice_type]} ${esc(doc.doc_number)}`, `
           <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>العميل:</b> ${esc(doc.party_name || '—')}
+            &nbsp; <b>طريقة الدفع:</b> ${doc.payment_method === 'cash' ? 'نقدي' : 'آجل'}
             &nbsp; <b>السائق:</b> ${esc(doc.driver_name || '—')} &nbsp; <b>السيارة:</b> ${esc(doc.car_number || '—')}</p>
           <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>السعر</th><th>الإجمالي</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
@@ -83,6 +85,7 @@ register('sales', {
         const doc = await api.invoke('sales:get', id);
         if (!(await implicationsDialog('إلغاء فاتورة', [
           `سيُلغى أثر الفاتورة ${esc(doc.doc_number)} على المخزون والسلات وتُعاد الكميات.`,
+          'سيُعكس أثرها المحاسبي أيضاً: تُشطب ذمة العميل أو القبض النقدي المسجل لها.',
         ]))) return;
         await api.invoke('sales:void', id, currentUser().id);
         toast('تم إلغاء الفاتورة', 'ok');
@@ -113,6 +116,11 @@ register('sales', {
             <select id="f-party"><option value="">— بدون —</option>
               ${customers.map(p => `<option value="${p.id}" ${doc && doc.party_id === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
             </select></div>
+          <div class="field"><label>طريقة الدفع *</label>
+            <select id="f-pay">
+              <option value="credit" ${doc && doc.payment_method !== 'cash' ? 'selected' : ''}>آجل (يُسجل على ذمة العميل)</option>
+              <option value="cash" ${doc && doc.payment_method === 'cash' ? 'selected' : ''}>نقدي (يقبض فوراً للنقدية)</option>
+            </select></div>
           <div class="field"><label>السائق</label><input id="f-driver" value="${esc(doc ? doc.driver_name || '' : '')}"></div>
           <div class="field"><label>رقم السيارة</label><input id="f-car" value="${esc(doc ? doc.car_number || '' : '')}"></div>
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(doc ? doc.notes || '' : '')}"></div>
@@ -137,13 +145,14 @@ register('sales', {
               unit: r.querySelector('.p-unit').value,
               unit_price: parseFloat(r.querySelector('.p-price').value) || 0,
               notes: r.querySelector('.p-notes').value,
-            }));
+            })).filter(x => x.item_id);
             await api.invoke('sales:save', {
               id: doc ? doc.id : null,
               doc_number: b.querySelector('#f-num').value,
               doc_date: b.querySelector('#f-date').value,
               invoice_type: b.querySelector('#f-type').value,
               party_id: b.querySelector('#f-party').value ? Number(b.querySelector('#f-party').value) : null,
+              payment_method: b.querySelector('#f-pay').value,
               driver_name: b.querySelector('#f-driver').value,
               car_number: b.querySelector('#f-car').value,
               notes: b.querySelector('#f-notes').value,
@@ -171,7 +180,7 @@ register('sales', {
         const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td class="p-item-td"></td>
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
@@ -181,6 +190,8 @@ register('sales', {
           <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
           <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
+        const combo = itemCombo(items, () => row.querySelector('.p-item').dispatchEvent(new Event('change')));
+        row.querySelector('.p-item-td').appendChild(combo.box);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
 
         const itemSel = row.querySelector('.p-item');
@@ -227,7 +238,7 @@ register('sales', {
         qty.oninput = update;
         price.oninput = update;
         row._refresh = update;
-        if (data.item_id) itemSel.value = String(data.item_id);
+        if (data.item_id) combo.setValue(data.item_id);
         if (data.warehouse_id) whSel.value = String(data.warehouse_id);
         refresh();
       }

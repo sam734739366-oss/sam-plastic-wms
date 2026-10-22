@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, renderTable, openModal, esc , itemCombo} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -115,9 +115,9 @@ register('tolling', {
         const doc = await api.invoke('tolling:receiptGet', id);
         openModal(`سند استلام خام ${esc(doc.doc_number)}`, `
           <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>العميل:</b> ${esc(doc.party_name)}</p>
-          <table class="data"><thead><tr><th>الصنف</th><th>العلب</th><th>حبات/علبة</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
+          <table class="data"><thead><tr><th>الصنف</th><th>الكمية</th><th>الوحدة</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${fmtNum(it.boxes)}</td>
-            <td>${fmtNum(it.pieces_per_box, 0)}</td><td>${fmtNum(it.pieces, 0)}</td>
+            <td>${esc(it.unit || 'علبة')}</td><td>${fmtNum(it.pieces, 0)}</td>
             <td>${fmtNum(it.weight_kg)}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
           [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'toll_receipt', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
@@ -139,7 +139,7 @@ register('tolling', {
         </div>
         <table class="doc-lines">
           <thead><tr>
-            <th>الصنف</th><th>عدد العلب</th><th>حبات/علبة</th><th>الحبات</th><th>الوزن كجم</th><th>ملاحظات</th><th></th>
+            <th>الصنف</th><th>الكمية</th><th>الوحدة</th><th>الحبات</th><th>الوزن كجم</th><th>ملاحظات</th><th></th>
           </tr></thead>
           <tbody id="irows"></tbody>
           <tfoot><tr>
@@ -152,11 +152,11 @@ register('tolling', {
           try {
             const itemsData = [...b.querySelectorAll('.irow')].map(r => ({
               item_id: Number(r.querySelector('.p-item').value),
-              boxes: parseFloat(r.querySelector('.p-boxes').value) || 0,
-              pieces_per_box: parseFloat(r.querySelector('.p-perbox').value) || 0,
+              quantity: parseFloat(r.querySelector('.p-qty').value) || 0,
+              unit: r.querySelector('.p-unit').value,
               weight_kg: parseFloat(r.querySelector('.p-weight').value) || null,
               notes: r.querySelector('.p-notes').value,
-            }));
+            })).filter(x => x.item_id);
             await api.invoke('tolling:receiptSave', {
               id: doc ? doc.id : null,
               doc_number: b.querySelector('#f-num').value,
@@ -176,7 +176,8 @@ register('tolling', {
       function updateTotal() {
         let total = 0;
         for (const r of rowsWrap.querySelectorAll('.irow')) {
-          total += (parseFloat(r.querySelector('.p-boxes').value) || 0) * (parseFloat(r.querySelector('.p-perbox').value) || 0);
+          const item = itemById(Number(r.querySelector('.p-item').value));
+          total += toPieces(r.querySelector('.p-qty').value, r.querySelector('.p-unit').value, item) || 0;
         }
         totalEl.textContent = fmtNum(total, 0) + ' حبة';
       }
@@ -185,41 +186,56 @@ register('tolling', {
         const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
-          <td><input class="p-boxes num" type="number" min="0" step="any" value="${esc(data.boxes ?? '')}"></td>
-          <td><input class="p-perbox num" type="number" min="0" step="any" value="${esc(data.pieces_per_box ?? '')}"></td>
+          <td class="p-item-td"></td>
+          <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
+          <td><select class="p-unit"></select></td>
           <td><span class="p-calc muted"></span></td>
           <td><input class="p-weight num" type="number" min="0" step="any" value="${esc(data.weight_kg ?? '')}"></td>
           <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
           <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
+        const combo = itemCombo(items, () => row.querySelector('.p-item').dispatchEvent(new Event('change')));
+        row.querySelector('.p-item-td').appendChild(combo.box);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
         const itemSel = row.querySelector('.p-item');
-        const perBox = row.querySelector('.p-perbox');
-        const boxes = row.querySelector('.p-boxes');
+        const unitSel = row.querySelector('.p-unit');
+        const qty = row.querySelector('.p-qty');
+        const weight = row.querySelector('.p-weight');
         const calc = row.querySelector('.p-calc');
-        const fillPerBox = () => {
-          if (!perBox.value) {
-            const item = itemById(Number(itemSel.value));
-            if (item && item.pieces_per_carton) perBox.value = item.pieces_per_carton;
-          }
+        let weightAuto = data.weight_kg == null;
+        weight.oninput = () => { weightAuto = false; };
+        function refresh() {
+          const item = itemById(Number(itemSel.value));
+          if (!item) return;
+          const cur = unitSel.value;
+          const opts = unitOptionsFor(item);
+          unitSel.innerHTML = opts.map(o => `<option value="${o.value}">${esc(o.label)}</option>`).join('');
+          if (opts.some(o => o.value === cur)) unitSel.value = cur;
+          else if (data.unit && opts.some(o => o.value === data.unit)) unitSel.value = data.unit;
           update();
-        };
+        }
         function update() {
-          const b = parseFloat(boxes.value) || 0;
-          const p = parseFloat(perBox.value) || 0;
-          calc.textContent = b && p ? fmtNum(b * p, 0) + ' حبة' : '';
+          const item = itemById(Number(itemSel.value));
+          const pieces = item ? toPieces(qty.value, unitSel.value, item) : null;
+          calc.textContent = pieces != null && pieces > 0 ? fmtNum(pieces, 0) + ' حبة' : '';
+          if (item && weightAuto) {
+            let w = null;
+            if (unitSel.value === 'كجم') w = parseFloat(qty.value) || null;
+            else if (unitSel.value === 'طن') w = (parseFloat(qty.value) || 0) * 1000;
+            else if (pieces != null) w = piecesToWeightKg(pieces, item.weight_grams) || null;
+            weight.value = w != null && w > 0 ? Math.round(w * 1000) / 1000 : '';
+          }
           updateTotal();
         }
-        itemSel.onchange = fillPerBox;
-        boxes.oninput = update;
-        perBox.oninput = update;
-        if (data.item_id) itemSel.value = String(data.item_id);
-        fillPerBox();
+        itemSel.onchange = refresh;
+        unitSel.onchange = update;
+        qty.oninput = update;
+        if (data.item_id) combo.setValue(data.item_id);
+        refresh();
       }
 
       if (doc && doc.items.length) {
-        for (const it of doc.items) addRow(it);
+        for (const it of doc.items) addRow({ item_id: it.item_id, quantity: it.boxes, unit: it.unit || 'علبة', weight_kg: it.weight_kg, notes: it.notes });
       } else {
         addRow();
       }
@@ -294,7 +310,7 @@ register('tolling', {
               quantity: parseFloat(r.querySelector('.p-qty').value) || 0,
               unit: r.querySelector('.p-unit').value,
               notes: r.querySelector('.p-notes').value,
-            }));
+            })).filter(x => x.item_id);
             const payload = {
               id: doc ? doc.id : null,
               doc_number: b.querySelector('#f-num').value,
@@ -354,13 +370,15 @@ register('tolling', {
         const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td class="p-item-td"></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
           <td><span class="p-calc muted"></span></td>
           <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
           <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
+        const combo = itemCombo(items, () => row.querySelector('.p-item').dispatchEvent(new Event('change')));
+        row.querySelector('.p-item-td').appendChild(combo.box);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
         const itemSel = row.querySelector('.p-item');
         const unitSel = row.querySelector('.p-unit');
@@ -385,7 +403,7 @@ register('tolling', {
         itemSel.onchange = refresh;
         unitSel.onchange = update;
         qty.oninput = update;
-        if (data.item_id) itemSel.value = String(data.item_id);
+        if (data.item_id) combo.setValue(data.item_id);
         refresh();
       }
 
@@ -415,12 +433,14 @@ register('tolling', {
         const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td class="p-item-td"></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="0"></td>
           <td><input class="p-price num" type="number" min="0" step="any" value=""></td>
           <td><span class="p-calc muted">0</span></td>
           <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         invRows.appendChild(row);
+        const combo = itemCombo(items, () => row.querySelector('.p-item').dispatchEvent(new Event('change')));
+        row.querySelector('.p-item-td').appendChild(combo.box);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateInvTotal(); };
         const update = () => {
           const q = parseFloat(row.querySelector('.p-qty').value) || 0;

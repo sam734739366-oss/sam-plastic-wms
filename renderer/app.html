@@ -8,6 +8,7 @@
 </head>
 <body>
 <div class="layout">
+  <div class="app-main">
   <aside class="sidebar">
     <div class="brand">
       <span class="brand-logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2h4l1 3v4l4.5 10.5A1.8 1.8 0 0 1 17.8 22H6.2a1.8 1.8 0 0 1-1.7-2.5L9 9V5l1-3z"/><path d="M10 2h4"/><path d="M9 13h6"/></svg></span>
@@ -21,18 +22,25 @@
       <a data-screen="warehouses" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10l7-5 7 5v11"/><path d="M9 21v-6h6v6"/></svg>المخازن</a>
       <a data-screen="machines" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg>المكائن</a>
       <a data-screen="shifts" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>الورديات</a>
-      <div class="nav-group">الحركات</div>
+      <div class="nav-group">الشراء والإنتاج</div>
       <a data-screen="purchases" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/><path d="M3 4h2l2.5 11h10L20 7H6"/></svg>فواتير الشراء</a>
       <a data-screen="issues" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 15v5h16v-5"/></svg>تصاريح الصرف للإنتاج</a>
       <a data-screen="production" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V9l6 4V9l6 4V9l6 4v8H3z"/><path d="M6 16h2M11 16h2M16 16h2"/></svg>نتيجة الإنتاج</a>
+      <a data-screen="cartons" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4V7z"/><path d="M3 7l9 4 9-4"/><path d="M12 11v10"/><path d="M7.5 4.8V13M16.5 4.8V13"/></svg>متابعة الكراتين</a>
       <a data-screen="receives" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><path d="m7 11 5 5 5-5"/><path d="M4 20h16"/></svg>استلام الإنتاج التام</a>
+      <div class="nav-group">المبيعات</div>
       <a data-screen="sales" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 12h.01M18 12h.01"/></svg>فواتير البيع</a>
+      <a data-screen="returns" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-2 3h-2z"/><path d="M4 7h16v13H4z"/><path d="M9 13h6"/><path d="M12 11l-3 2 3 2"/></svg>مرتجعات الفواتير</a>
       <a data-screen="exits" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4H4v16h6"/><path d="M13 12h7"/><path d="m16 9 3 3-3 3"/></svg>تصاريح الخروج</a>
-      <a data-screen="scrap" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6 7 1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>التالف ومصيره</a>
       <a data-screen="tolling" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13"/><path d="m13 5 4 4-4 4"/><path d="M20 15H7"/><path d="m11 11-4 4 4 4"/></svg>النفخ للغير</a>
-      <a data-screen="transfers" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18"/><path d="m15 3 6 4-6 4"/><path d="M21 17H3"/><path d="m9 13-6 4 6 4"/></svg>نقل بين المخازن</a>
-      <div class="nav-group">التقارير</div>
+      <div class="nav-group">المخازن</div>
       <a data-screen="stock" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg>المخزون</a>
+      <a data-screen="transfers" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18"/><path d="m15 3 6 4-6 4"/><path d="M21 17H3"/><path d="m9 13-6 4 6 4"/></svg>نقل بين المخازن</a>
+      <a data-screen="scrap" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6 7 1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>التالف ومصيره</a>
+      <div class="nav-group">الحسابات</div>
+      <a data-screen="payments" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6.5 12h.01M17.5 12h.01"/></svg>سندات القبض والدفع</a>
+      <a data-screen="statements" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h14v18H5z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg>كشوفات الحسابات</a>
+      <div class="nav-group">التقارير</div>
       <a data-screen="reports" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 20.5h19"/><path d="M5.5 20.5v-6"/><path d="M11.5 20.5v-12"/><path d="M17.5 20.5v-9"/></svg>التقارير</a>
       <a data-screen="audit" class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="m9.5 12 2 2 3.5-4"/></svg>سجل التدقيق</a>
       <div class="nav-group">النظام</div>
@@ -42,7 +50,9 @@
     </nav>
     <div class="sidebar-footer"><span id="current-user"></span><button id="logout" class="btn small">خروج</button></div>
   </aside>
-  <main id="screen" class="screen"></main>
+  <main id="desktop" class="desktop"></main>
+  </div>
+  <div id="taskbar" class="taskbar"></div>
 </div>
 <script type="module" src="js/app.js"></script>
 </body>

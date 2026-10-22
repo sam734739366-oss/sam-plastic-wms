@@ -1,14 +1,62 @@
 import { currentUser } from './api.js';
-import { go } from './router.js';
+import { go, setOpener } from './router.js';
+import { initWM, openWindow } from './wm.js';
 import { setCurrency } from './fmt.js';
+import { toast } from './ui.js';
 
 const u = currentUser();
 if (!u) location.href = 'index.html';
 
-const roleLabel = { manager: 'مدير', clerk: 'إدخال', viewer: 'عرض' };
+const roleLabel = {
+  manager: 'مدير', clerk: 'إدخال عام', viewer: 'عرض فقط',
+  warehouse: 'مخازن', accounts: 'حسابات', sales: 'مبيعات',
+};
 document.getElementById('current-user').textContent = `${u.full_name} (${roleLabel[u.role] || u.role})`;
 document.getElementById('logout').onclick = () => { sessionStorage.clear(); location.href = 'index.html'; };
-document.querySelectorAll('.nav-item').forEach(a => a.onclick = () => go(a.dataset.screen));
+
+// الشاشات المتاحة لكل دور — null تعني كل الشاشات (المدير)
+const ROLE_SCREENS = {
+  manager: null,
+  clerk: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
+    'purchases', 'issues', 'production', 'receives', 'cartons', 'sales', 'returns', 'exits',
+    'scrap', 'tolling', 'transfers', 'payments', 'statements', 'stock', 'reports'],
+  viewer: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
+    'purchases', 'issues', 'production', 'receives', 'cartons', 'sales', 'returns', 'exits',
+    'scrap', 'tolling', 'transfers', 'payments', 'statements', 'stock', 'reports', 'audit'],
+  warehouse: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
+    'purchases', 'issues', 'production', 'receives', 'cartons', 'scrap', 'transfers', 'stock', 'returns', 'reports'],
+  sales: ['dashboard', 'items', 'parties', 'sales', 'returns', 'exits', 'tolling', 'statements', 'reports'],
+  accounts: ['dashboard', 'parties', 'payments', 'statements', 'reports', 'audit'],
+};
+const allowed = (screen) => {
+  const list = ROLE_SCREENS[u.role];
+  if (!list) return true;
+  return list.includes(screen);
+};
+
+document.querySelectorAll('.nav-item').forEach(a => {
+  if (!allowed(a.dataset.screen)) a.remove();
+  else a.onclick = () => go(a.dataset.screen);
+});
+// إخفاء عناوين المجموعات التي صارت فارغة بعد فلترة الأدوار
+document.querySelectorAll('#nav .nav-group').forEach(g => {
+  let next = g.nextElementSibling;
+  let hasItem = false;
+  while (next && !next.classList.contains('nav-group')) {
+    if (next.classList.contains('nav-item')) { hasItem = true; break; }
+    next = next.nextElementSibling;
+  }
+  if (!hasItem) g.remove();
+});
+
+initWM(document.getElementById('desktop'), document.getElementById('taskbar'));
+setOpener((name) => {
+  if (!allowed(name)) { toast('هذه الشاشة غير متاحة لدورك الحالي', 'err'); return; }
+  openWindow(name, { refresh: true });
+});
+window.addEventListener('wm:focus', (e) => {
+  document.querySelectorAll('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.screen === e.detail.name));
+});
 
 import './screens/dashboard.js';
 import './screens/items.js';
@@ -20,11 +68,15 @@ import './screens/purchases.js';
 import './screens/issues.js';
 import './screens/production.js';
 import './screens/receives.js';
+import './screens/cartons.js';
 import './screens/sales.js';
+import './screens/returns.js';
 import './screens/exits.js';
 import './screens/scrap.js';
 import './screens/tolling.js';
 import './screens/transfers.js';
+import './screens/payments.js';
+import './screens/statements.js';
 import './screens/stock.js';
 import './screens/reports.js';
 import './screens/audit.js';

@@ -11,8 +11,8 @@ function normalizeCode(v) {
   return String(v || '').trim().replace(/[٠-٩۰-۹]/g, (d) => AR_DIGITS[d] || d);
 }
 
-// مزامنة الرصيد الافتتاحي: تُحذف حركات الافتتاح القديمة للصنف وتُكتب حركة واحدة
-// تعادل مجموع (سليم+تالف+محرز) في أول مخزن، فتظهر الكميات في الجرد والتقارير
+// مزامنة الرصيد الافتتاحي: تُحذف حركات الافتتاح القديمة للصنف وتُكتب حركة لكل سلة
+// (سليم/تالف/محرز) في أول مخزن، فتظهر الكميات في الجرد والتقارير لكل مخزن على حدة
 // وتصبح قابلة للصرف والبيع. تُستدعى عند إنشاء الصنف وتعديل أرصدته الافتتاحية.
 function syncOpeningMoves(db, itemId, userId) {
   const item = db.prepare('SELECT * FROM items WHERE id=?').get(itemId);
@@ -20,16 +20,20 @@ function syncOpeningMoves(db, itemId, userId) {
   const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get();
   if (!wh) return;
   db.prepare("DELETE FROM stock_moves WHERE doc_type='opening' AND doc_id=?").run(itemId);
-  const total = (Number(item.qty_salem) || 0) + (Number(item.qty_talef) || 0) + (Number(item.qty_muharraz) || 0);
-  if (total > 0) {
-    db.prepare(`INSERT INTO stock_moves
-      (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
-       qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, notes)
-      VALUES ('opening',?,?,?,?,?,?,0,?,0,?)`)
-      .run(itemId, `افتتاحي-${item.code}`, new Date().toISOString().slice(0, 10), itemId, wh.id,
-        total, total * (Number(item.weight_grams) || 0) / 1000, 'رصيد افتتاحي (سليم/تالف/محرز)');
+  const buckets = [
+    ['salem', Number(item.qty_salem) || 0, 'سليم'],
+    ['talef', Number(item.qty_talef) || 0, 'تالف'],
+    ['muharraz', Number(item.qty_muharraz) || 0, 'محرز'],
+  ];
+  const ins = db.prepare(`INSERT INTO stock_moves
+    (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+     qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, bucket, notes)
+    VALUES ('opening',?,?,?,?,?,?,0,?,0,?,?)`);
+  for (const [key, qty, label] of buckets) {
+    if (qty > 0) ins.run(itemId, `افتتاحي-${item.code}`, new Date().toISOString().slice(0, 10), itemId, wh.id,
+      qty, qty * (Number(item.weight_grams) || 0) / 1000, key, `رصيد افتتاحي (${label})`);
   }
-  audit(db, userId, 'stock_write', 'opening', itemId, null, { pieces: total });
+  audit(db, userId, 'stock_write', 'opening', itemId, null, { pieces: buckets.reduce((s, b) => s + b[1], 0) });
 }
 
 module.exports = function register(ipcMain) {

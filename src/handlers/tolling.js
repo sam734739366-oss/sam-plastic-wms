@@ -57,16 +57,28 @@ module.exports = function register(ipcMain) {
           .run(number, doc.doc_date, doc.party_id, doc.notes || null, userId).lastInsertRowid;
       }
       const ins = db.prepare(`INSERT INTO customer_raw_items
-        (receipt_id, item_id, boxes, pieces_per_box, pieces, weight_kg, notes) VALUES (?,?,?,?,?,?,?)`);
+        (receipt_id, item_id, boxes, pieces_per_box, pieces, unit, weight_kg, notes) VALUES (?,?,?,?,?,?,?,?)`);
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
-        const boxes = Math.max(0, Number(it.boxes) || 0);
-        const perBox = Math.max(0, Number(it.pieces_per_box) || item.pieces_per_carton || 0);
-        const pieces = boxes * perBox;
-        if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
+        let boxes, perBox, pieces, unit;
+        if (it.unit) {
+          // الشكل الجديد: كمية + وحدة (حبة/علبة/كرتون/شدة/كيس/كجم/طن) محسوبة بتوابع الصنف
+          unit = it.unit;
+          boxes = Math.max(0, Number(it.quantity) || 0);
+          pieces = toPieces(boxes, unit, item);
+          if (pieces == null || pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code} بالوحدة ${unit}`);
+          perBox = null;
+        } else {
+          // الشكل القديم: علب × حبات/علبة (متوافق مع بيانات سابقة)
+          unit = item.unit_name || 'علبة';
+          boxes = Math.max(0, Number(it.boxes) || 0);
+          perBox = Math.max(0, Number(it.pieces_per_box) || item.pieces_per_carton || 0);
+          pieces = boxes * perBox;
+          if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
+        }
         const weight = Number(it.weight_kg) || null;
-        ins.run(id, item.id, boxes, perBox || null, pieces, weight, it.notes || null);
+        ins.run(id, item.id, boxes, perBox || null, pieces, unit, weight, it.notes || null);
       }
     });
     audit(db, userId, isNew ? 'create' : 'update', 'customer_raw_receipt', id, before, doc);

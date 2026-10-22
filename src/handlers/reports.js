@@ -17,7 +17,9 @@ module.exports = function register(ipcMain) {
     if (filters.warehouseId) { joinWh = ' AND m.warehouse_id = ?'; params.push(filters.warehouseId); }
     const rows = db.prepare(`SELECT i.id, i.code, i.name, i.unit_name, i.weight_grams, i.pieces_per_carton,
         i.pieces_per_shadda, i.pieces_per_bag,
-        i.qty_salem, i.qty_talef, i.qty_muharraz,
+        COALESCE(SUM(CASE WHEN m.bucket='salem' THEN m.qty_in_pieces - m.qty_out_pieces ELSE 0 END),0) qty_salem,
+        COALESCE(SUM(CASE WHEN m.bucket='talef' THEN m.qty_in_pieces - m.qty_out_pieces ELSE 0 END),0) qty_talef,
+        COALESCE(SUM(CASE WHEN m.bucket='muharraz' THEN m.qty_in_pieces - m.qty_out_pieces ELSE 0 END),0) qty_muharraz,
         COALESCE(SUM(m.qty_in_pieces),0) in_pieces,
         COALESCE(SUM(m.qty_out_pieces),0) out_pieces,
         COALESCE(SUM(m.qty_in_pieces),0) - COALESCE(SUM(m.qty_out_pieces),0) balance_pieces,

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT NOT NULL UNIQUE,
   full_name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('manager','clerk','viewer')),
+  role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('manager','clerk','viewer','warehouse','accounts','sales')),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS purchases (
   doc_date TEXT NOT NULL,
   party_id INTEGER REFERENCES parties(id),
   notes TEXT,
+  payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
@@ -152,6 +153,7 @@ CREATE TABLE IF NOT EXISTS receive_permits (
   shift_id INTEGER REFERENCES shifts(id),
   source TEXT NOT NULL DEFAULT 'own' CHECK (source IN ('own','customer')),
   party_id INTEGER REFERENCES parties(id),
+  issue_permit_id INTEGER REFERENCES issue_permits(id),
   receiver_name TEXT,
   notes TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
@@ -177,6 +179,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   doc_date TEXT NOT NULL,
   party_id INTEGER REFERENCES parties(id),
   invoice_type TEXT NOT NULL DEFAULT 'sale' CHECK (invoice_type IN ('sale','scrap','blowing_fee')),
+  payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit')),
   driver_name TEXT,
   car_number TEXT,
   notes TEXT,
@@ -240,9 +243,10 @@ CREATE TABLE IF NOT EXISTS customer_raw_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   receipt_id INTEGER NOT NULL REFERENCES customer_raw_receipts(id) ON DELETE CASCADE,
   item_id INTEGER NOT NULL REFERENCES items(id),
-  boxes INTEGER NOT NULL,
+  boxes REAL NOT NULL DEFAULT 0,
   pieces_per_box INTEGER,
   pieces INTEGER NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'علبة',
   weight_kg REAL,
   notes TEXT
 );
@@ -290,6 +294,62 @@ CREATE TABLE IF NOT EXISTS scrap_movements (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
+-- مرتجعات البيع: إرجاع العميل بضاعة من فاتورة بيع (ترجع للمخزون وتخفض ذمة العميل)
+CREATE TABLE IF NOT EXISTS sales_returns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_number TEXT NOT NULL UNIQUE,
+  doc_date TEXT NOT NULL,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  party_id INTEGER REFERENCES parties(id),
+  payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit')),
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS sales_return_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  return_id INTEGER NOT NULL REFERENCES sales_returns(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES items(id),
+  warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+  quantity REAL NOT NULL,
+  unit TEXT NOT NULL,
+  pieces INTEGER NOT NULL,
+  weight_kg REAL NOT NULL,
+  unit_price REAL,
+  total_price REAL,
+  notes TEXT
+);
+
+-- مرتجعات الشراء: إرجاع المصنع بضاعة للمورد (تخرج من المخزون وتخفض ذمة المورد)
+CREATE TABLE IF NOT EXISTS purchase_returns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_number TEXT NOT NULL UNIQUE,
+  doc_date TEXT NOT NULL,
+  purchase_id INTEGER NOT NULL REFERENCES purchases(id),
+  party_id INTEGER REFERENCES parties(id),
+  payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit')),
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS purchase_return_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  return_id INTEGER NOT NULL REFERENCES purchase_returns(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES items(id),
+  warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+  quantity REAL NOT NULL,
+  unit TEXT NOT NULL,
+  pieces INTEGER NOT NULL,
+  weight_kg REAL NOT NULL,
+  unit_price REAL,
+  total_price REAL,
+  notes TEXT
+);
+
 CREATE TABLE IF NOT EXISTS transfers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   doc_number TEXT NOT NULL UNIQUE,
@@ -325,11 +385,45 @@ CREATE TABLE IF NOT EXISTS stock_moves (
   qty_out_pieces INTEGER NOT NULL DEFAULT 0,
   weight_in_kg REAL NOT NULL DEFAULT 0,
   weight_out_kg REAL NOT NULL DEFAULT 0,
+  bucket TEXT,
   notes TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_moves(item_id, warehouse_id);
 CREATE INDEX IF NOT EXISTS idx_stock_doc ON stock_moves(doc_type, doc_id);
+
+CREATE TABLE IF NOT EXISTS party_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  party_id INTEGER REFERENCES parties(id),
+  doc_type TEXT NOT NULL,
+  doc_id INTEGER NOT NULL,
+  doc_number TEXT NOT NULL,
+  doc_date TEXT NOT NULL,
+  side TEXT NOT NULL CHECK (side IN ('debit','credit')),
+  amount REAL NOT NULL DEFAULT 0,
+  cash_in REAL NOT NULL DEFAULT 0,
+  cash_out REAL NOT NULL DEFAULT 0,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_party ON party_ledger(party_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_doc ON party_ledger(doc_type, doc_id);
+
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_number TEXT NOT NULL UNIQUE,
+  doc_date TEXT NOT NULL,
+  party_id INTEGER NOT NULL REFERENCES parties(id),
+  direction TEXT NOT NULL CHECK (direction IN ('in','out')),
+  amount REAL NOT NULL,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -24,6 +24,9 @@ const KIND_TEMPLATE = {
   scrap: templates.scrapTemplate,
   transfer: templates.transferTemplate,
   production: templates.productionTemplate,
+  payment: templates.paymentTemplate,
+  sale_return: templates.returnTemplate,
+  purchase_return: templates.returnTemplate,
 };
 
 ipcMain.handle('print:open', (e, payload) => {
@@ -46,7 +49,10 @@ ipcMain.handle('print:open', (e, payload) => {
     autoHideMenuBar: true
   });
   win.loadFile(path.join(__dirname, 'renderer', 'print', 'print.html'));
-  win.webContents.on('did-finish-load', () => win.webContents.send('print:content', { html, title }));
+  const paper = payload.kind === 'report'
+    ? (settings.report_page_size || 'A4')
+    : (settings.doc_page_size || 'A5');
+  win.webContents.on('did-finish-load', () => win.webContents.send('print:content', { html, title, paper }));
   return { ok: true };
 });
 

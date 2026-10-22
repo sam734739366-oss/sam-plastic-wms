@@ -74,9 +74,24 @@ module.exports = function register(ipcMain) {
             good, before, after, data.notes || null, userId);
       }
       db.prepare(`UPDATE cartons SET status='finished' WHERE id=?`).run(data.carton_id);
-      // التالف المسجل في النتيجة يزيد رصيد تالف للصنف
+      // التالف المسجل في النتيجة يزيد رصيد تالف للصنف ويظهر في جرد مخزن الصرف
       if (newDefects !== oldDefects) {
         bucketsDelta(db, carton.item_id, { talef: newDefects - oldDefects });
+      }
+      db.prepare("DELETE FROM stock_moves WHERE doc_type='production' AND doc_id=?").run(data.carton_id);
+      if (newDefects > 0) {
+        const ii = db.prepare('SELECT warehouse_id FROM issue_items WHERE issue_permit_id=? AND item_id=? LIMIT 1')
+          .get(carton.issue_permit_id, carton.item_id);
+        if (ii) {
+          const item = db.prepare('SELECT * FROM items WHERE id=?').get(carton.item_id);
+          const wkg = newDefects * (Number(item.weight_grams) || 0) / 1000;
+          db.prepare(`INSERT INTO stock_moves
+            (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+             qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, bucket, notes)
+            VALUES ('production',?,?,?,?,?,?,0,?,0,'talef',?)`)
+            .run(data.carton_id, carton.carton_number, data.result_date, carton.item_id, ii.warehouse_id,
+              newDefects, wkg, 'تالف مسجل في نتيجة الإنتاج');
+        }
       }
     });
     audit(db, userId, previous ? 'update' : 'create', 'production_result', data.carton_id, previous, data);
@@ -92,6 +107,7 @@ module.exports = function register(ipcMain) {
     withTransaction(db, () => {
       db.prepare('DELETE FROM production_results WHERE carton_id=?').run(cartonId);
       db.prepare(`UPDATE cartons SET status='issued' WHERE id=?`).run(cartonId);
+      db.prepare("DELETE FROM stock_moves WHERE doc_type='production' AND doc_id=?").run(cartonId);
       if (oldDefects > 0) bucketsDelta(db, carton.item_id, { talef: -oldDefects });
     });
     audit(db, userId, 'delete', 'production_result', cartonId, previous, null);

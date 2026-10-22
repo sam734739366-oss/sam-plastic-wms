@@ -86,7 +86,7 @@ module.exports = function register(ipcMain) {
     if (pieces <= 0 && weight <= 0) throw new Error('أدخل كمية (حبات أو وزن)');
     const party = doc.party_id ? db.prepare('SELECT * FROM parties WHERE id=?').get(doc.party_id) : null;
     const isCustomer = party && (party.type === 'customer' || party.type === 'both') ? 1 : 0;
-    if (!isCustomer && ['to_recycled', 'to_stock', 'sold_scrap'].includes(doc.disposition) && !doc.warehouse_id) {
+    if (!isCustomer && ['to_recycled', 'to_stock', 'sold_scrap', 'to_supplier'].includes(doc.disposition) && !doc.warehouse_id) {
       throw new Error('اختر المخزن');
     }
     const isNew = !doc.id;
@@ -113,12 +113,29 @@ module.exports = function register(ipcMain) {
       const moves = [];
       const kg = weight || piecesToWeightKg(pieces, item.weight_grams || 0);
       if (!isCustomer) {
+        const talefTake = Number(d.talef_take) || 0;
+        const salemTake = Number(d.salem_take) || 0;
+        const pushOut = (qty, bucket) => {
+          if (qty > 0) moves.push({
+            item_id: item.id, warehouse_id: doc.warehouse_id,
+            qty_out_pieces: qty, weight_out_kg: kg * qty / Math.max(1, pieces),
+            bucket, notes: doc.notes,
+          });
+        };
         if (doc.disposition === 'to_recycled' || doc.disposition === 'to_stock') {
-          moves.push({ item_id: item.id, warehouse_id: doc.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, notes: doc.notes });
-        } else if (doc.disposition === 'sold_scrap') {
+          // إخراج التالف/السليم المأخوذ ثم إعادة إدخاله بصفته الجديدة (محرز أو سليم)
+          pushOut(talefTake, 'talef');
+          pushOut(salemTake, 'salem');
+          moves.push({
+            item_id: item.id, warehouse_id: doc.warehouse_id,
+            qty_in_pieces: pieces, weight_in_kg: kg,
+            bucket: doc.disposition === 'to_recycled' ? 'muharraz' : 'salem', notes: doc.notes,
+          });
+        } else { // sold_scrap / to_supplier: خروج نهائي
           const bal = getBalance(db, item.id, doc.warehouse_id);
           if (bal.balance_pieces < pieces) throw new Error(`الرصيد غير كافٍ للصنف ${item.code} (المتوفر ${bal.balance_pieces} حبة)`);
-          moves.push({ item_id: item.id, warehouse_id: doc.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, notes: doc.notes });
+          pushOut(talefTake, 'talef');
+          pushOut(salemTake, 'salem');
         }
       }
       writeMoves(db, 'scrap', id, number, doc.doc_date, moves, userId);

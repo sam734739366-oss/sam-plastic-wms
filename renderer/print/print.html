@@ -2,24 +2,72 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <title>طباعة</title>
+  <title>معاينة الطباعة — سام بلاستيك</title>
   <style>
-    body { margin: 0; font-family: "Segoe UI", Tahoma, sans-serif; background: #f0f2f5; }
-    #toolbar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: linear-gradient(135deg, #1e3a8a, #3450b8); color: #fff; position: fixed; top: 0; left: 0; right: 0; z-index: 10; }
-    #toolbar h2 { margin: 0; font-size: 15px; flex: 1; }
-    button { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 8px 22px; font-size: 14px; cursor: pointer; }
-    button:hover { background: #1d4ed8; }
-    button.close { background: #6c757d; }
-    iframe { border: none; position: fixed; top: 48px; left: 0; right: 0; bottom: 0; width: 100%; height: calc(100% - 48px); background: #fff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", Tahoma, sans-serif; background: #dde3ec; }
+    #toolbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+      display: flex; flex-direction: column; gap: 5px; padding: 10px 16px;
+      background: linear-gradient(115deg, #0e1b3f, #1d3f9e 60%, #2b56d9);
+      border-bottom: 2px solid #d9a441;
+      color: #fff;
+    }
+    .tb-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    #docTitle { margin: 0; font-size: 15px; flex: 1; font-weight: 700; }
+    .brand-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: linear-gradient(135deg, #ffd98a, #d9a441);
+      box-shadow: 0 0 9px rgba(255, 214, 130, .6);
+    }
+    button {
+      background: rgba(255, 255, 255, .1); color: #fff;
+      border: 1px solid rgba(255, 255, 255, .28); border-radius: 8px;
+      padding: 7px 15px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+      transition: background .15s ease;
+    }
+    button:hover { background: rgba(255, 255, 255, .22); }
+    button.primary {
+      background: linear-gradient(180deg, #3b6cf0, #2450c8);
+      border-color: transparent; box-shadow: 0 2px 7px rgba(2, 6, 23, .35);
+      padding: 8px 22px;
+    }
+    button.primary:hover { filter: brightness(1.1); }
+    button.close { background: rgba(255, 255, 255, .06); }
+    button.close:hover { background: #dc2626; border-color: #dc2626; }
+    .zoom { min-width: 46px; text-align: center; font-size: 12.5px; font-weight: 700; color: #e8eefc; }
+    .hint { margin: 0; font-size: 11.5px; color: #c3d2f2; }
+    #paperWrap {
+      position: fixed; top: 88px; left: 0; right: 0; bottom: 0;
+      overflow: auto; padding: 26px 16px 40px;
+      display: flex; justify-content: center; align-items: flex-start;
+    }
+    #paper {
+      background: #fff; box-shadow: 0 8px 28px rgba(2, 6, 23, .28), 0 2px 6px rgba(2, 6, 23, .16);
+      border-radius: 2px; overflow: hidden; flex-shrink: 0;
+    }
+    #frame { display: block; border: none; width: 100%; background: #fff; }
+    #empty { color: #64748b; padding: 40px; font-size: 14px; }
   </style>
 </head>
 <body>
   <div id="toolbar">
-    <h2 id="docTitle">معاينة الطباعة</h2>
-    <button id="btnPrint">طباعة</button>
-    <button id="btnClose" class="close">إغلاق</button>
+    <div class="tb-row">
+      <span class="brand-dot"></span>
+      <h2 id="docTitle">معاينة الطباعة</h2>
+      <button id="btnFit" title="ضبط الورقة لتناسب عرض الشاشة">ملاءمة العرض</button>
+      <button id="btnZoomOut" title="تصغير">−</button>
+      <span id="zoomLabel" class="zoom">100%</span>
+      <button id="btnZoomIn" title="تكبير">+</button>
+      <button id="btnPrint" class="primary">طباعة</button>
+      <button id="btnClose" class="close">إغلاق</button>
+    </div>
+    <p class="hint">اضغط «طباعة» وستفتح نافذة الطباعة في النظام لاختيار الطابعة وعدد النسخ — تعمل مع الطابعات المتصلة بالسلك ومع طابعات الشبكة (واي فاي).</p>
   </div>
-  <iframe id="frame"></iframe>
+  <div id="paperWrap">
+    <div id="paper" style="display:none"><iframe id="frame"></iframe></div>
+    <p id="empty" style="display:none">لا يوجد مستند للعرض.</p>
+  </div>
   <script src="print.js"></script>
 </body>
 </html>

@@ -33,6 +33,9 @@ register('dashboard', {
         ${card('s-purchases', ICONS.coins, 'مشتريات الشهر', 't1')}
         ${card('s-sales', ICONS.coins, 'مبيعات الشهر', 't3')}
         ${card('s-cartons', ICONS.carton, 'كراتين معلقة بالمخزن', 't4')}
+        ${card('s-cash', ICONS.coins, 'رصيد النقدية', 't1')}
+        ${card('s-cust', ICONS.warn, 'ذمم العملاء (لنا)', 't3')}
+        ${card('s-supp', ICONS.warn, 'ذمم الموردين (علينا)', 't2')}
       </div>`;
     try {
       const d = await api.invoke('dashboard:summary');
@@ -44,6 +47,9 @@ register('dashboard', {
       el.querySelector('#s-purchases').textContent = fmtMoney(d.month_purchases);
       el.querySelector('#s-sales').textContent = fmtMoney(d.month_sales);
       el.querySelector('#s-cartons').textContent = d.pending_cartons;
+      el.querySelector('#s-cash').textContent = fmtMoney(d.cash_balance);
+      el.querySelector('#s-cust').textContent = fmtMoney(d.customers_due);
+      el.querySelector('#s-supp').textContent = fmtMoney(d.suppliers_due);
     } catch (e) { /* لا شيء */ }
   }
 });

@@ -3,6 +3,7 @@ const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
 const { writeMoves, voidDoc, applySalemDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const ledger = require('../ledger');
 
 function nextCartonNumbers(db, prefix, count) {
   const rows = db.prepare(`SELECT carton_number FROM cartons WHERE carton_number LIKE ? || '%'`).all(prefix);
@@ -48,6 +49,7 @@ module.exports = function register(ipcMain) {
     if (!doc.doc_date) throw new Error('التاريخ مطلوب');
     if (!doc.items || doc.items.length === 0) throw new Error('أضف بنداً واحداً على الأقل');
     if (!checkDocNumber(db, 'purchases', number, doc.id)) throw new Error('رقم الفاتورة مكرر');
+    const paymentMethod = doc.payment_method === 'cash' ? 'cash' : 'credit';
     const isNew = !doc.id;
     const before = isNew ? null : db.prepare('SELECT * FROM purchases WHERE id=?').get(doc.id);
     let id = doc.id;
@@ -59,11 +61,11 @@ module.exports = function register(ipcMain) {
         oldItems = db.prepare('SELECT * FROM purchase_items WHERE purchase_id=?').all(id);
         db.prepare('DELETE FROM purchase_items WHERE purchase_id=?').run(id);
         db.prepare('DELETE FROM cartons WHERE purchase_id=?').run(id);
-        db.prepare('UPDATE purchases SET doc_number=?, doc_date=?, party_id=?, notes=? WHERE id=?')
-          .run(number, doc.doc_date, doc.party_id || null, doc.notes || null, id);
+        db.prepare('UPDATE purchases SET doc_number=?, doc_date=?, party_id=?, notes=?, payment_method=? WHERE id=?')
+          .run(number, doc.doc_date, doc.party_id || null, doc.notes || null, paymentMethod, id);
       } else {
-        id = db.prepare('INSERT INTO purchases (doc_number, doc_date, party_id, notes, created_by) VALUES (?,?,?,?,?)')
-          .run(number, doc.doc_date, doc.party_id || null, doc.notes || null, userId).lastInsertRowid;
+        id = db.prepare('INSERT INTO purchases (doc_number, doc_date, party_id, notes, payment_method, created_by) VALUES (?,?,?,?,?,?)')
+          .run(number, doc.doc_date, doc.party_id || null, doc.notes || null, paymentMethod, userId).lastInsertRowid;
       }
       const moves = [];
       const insItem = db.prepare(`INSERT INTO purchase_items
@@ -76,7 +78,7 @@ module.exports = function register(ipcMain) {
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg,
           it.unit_price || null, (it.unit_price || 0) * it.quantity, it.notes || null);
-        moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, notes: it.notes });
+        moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket: 'salem', notes: it.notes });
       }
       writeMoves(db, 'purchase', id, number, doc.doc_date, moves, userId);
       // أرصدة سليم/تالف/محرز: الشراء يزيد السليم (وعكس القديم عند التعديل)
@@ -92,6 +94,9 @@ module.exports = function register(ipcMain) {
         const nums = nextCartonNumbers(db, prefix, count);
         for (const n of nums) insCarton.run(n, item.id, id, item.pieces_per_carton);
       }
+      // الأثر المحاسبي: ذمة للمورد + دفع نقدي إن كانت نقدية
+      const total = db.prepare(`SELECT COALESCE(SUM(total_price),0) t FROM purchase_items WHERE purchase_id=?`).get(id).t;
+      ledger.invoiceEffect(db, { docType: 'purchase', doc: { ...doc, id, payment_method: paymentMethod }, total, userId });
     });
     audit(db, userId, isNew ? 'create' : 'update', 'purchase', id, before, doc);
     return { id };
@@ -103,11 +108,14 @@ module.exports = function register(ipcMain) {
     if (!before) throw new Error('الفاتورة غير موجودة');
     const issued = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE purchase_id=? AND status != 'in_stock'`).get(id).c;
     if (issued > 0) throw new Error('يوجد كراتين من هذه الفاتورة صُرفت للإنتاج — ألغِ تصريح الصرف أولاً');
+    const returned = db.prepare(`SELECT COUNT(*) c FROM purchase_returns WHERE purchase_id=? AND status='active'`).get(id).c;
+    if (returned > 0) throw new Error('لا يمكن إلغاء الفاتورة — توجد مرتجعات نشطة عليها، ألغِ المرتجع أولاً');
     const oldItems = db.prepare('SELECT * FROM purchase_items WHERE purchase_id=?').all(id);
     withTransaction(db, () => {
       db.prepare('DELETE FROM cartons WHERE purchase_id=?').run(id);
       voidDoc(db, 'purchase', id, userId);
       applySalemDelta(db, oldItems, -1);
+      ledger.voidDoc(db, 'purchase', id);
       db.prepare(`UPDATE purchases SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'purchase', id, before, null);

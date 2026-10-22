@@ -47,6 +47,7 @@ function meta(doc, extra = '') {
   return `<div class="meta">${extra}
     <b>الرقم:</b> ${esc(doc.doc_number)} &nbsp; <b>التاريخ:</b> ${esc(doc.doc_date)}
     ${doc.party_name ? `&nbsp; <b>الطرف:</b> ${esc(doc.party_name)}` : ''}
+    ${doc.payment_method ? `&nbsp; <b>الدفع:</b> ${doc.payment_method === 'cash' ? 'نقدي' : 'آجل'}` : ''}
     ${doc.driver_name ? `&nbsp; <b>السائق:</b> ${esc(doc.driver_name)}` : ''}
     ${doc.car_number ? `&nbsp; <b>السيارة:</b> ${esc(doc.car_number)}` : ''}</div>`;
 }
@@ -75,8 +76,9 @@ function issueTemplate(doc, settings) {
 function receiveTemplate(doc, settings) {
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
     fmt(r.quantity, 3), esc(r.unit), num(r.pieces), fmt(r.weight_kg, 2)]);
+  const issueInfo = doc.issue_number ? `<b>تصريح الصرف:</b> ${esc(doc.issue_number)} &nbsp;` : '';
   return docShell([settings.factory_name || 'سام بلاستيك', 'تصريح استلام إنتاج تام'],
-    meta(doc, `${doc.machine_name ? `<b>المكينة:</b> ${esc(doc.machine_name)} &nbsp;` : ''}${doc.shift_name ? `<b>الوردية:</b> ${esc(doc.shift_name)} &nbsp;` : ''}`)
+    meta(doc, `${doc.machine_name ? `<b>المكينة:</b> ${esc(doc.machine_name)} &nbsp;` : ''}${doc.shift_name ? `<b>الوردية:</b> ${esc(doc.shift_name)} &nbsp;` : ''}${issueInfo}`)
     + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
@@ -153,6 +155,29 @@ function productionTemplate(doc, settings) {
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
+function returnTemplate(doc, settings) {
+  const isSale = doc.type !== 'purchase';
+  const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
+    fmt(r.quantity, 3), esc(r.unit), money(r.unit_price, settings), money(r.total_price, settings)]);
+  const total = (doc.items || []).reduce((s, r) => s + (r.total_price || 0), 0);
+  rows.push(['', 'الإجمالي', '', '', '', '', `<b>${money(total, settings)}</b>`]);
+  return docShell([settings.factory_name || 'سام بلاستيك', isSale ? 'مرتجع بيع' : 'مرتجع شراء'],
+    meta(doc, `${isSale ? (doc.invoice_number ? `<b>فاتورة البيع:</b> ${esc(doc.invoice_number)} &nbsp;` : '') : (doc.purchase_number ? `<b>فاتورة الشراء:</b> ${esc(doc.purchase_number)} &nbsp;` : '')}`)
+    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السعر', 'الإجمالي'], rows)
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+}
+
+function paymentTemplate(doc, settings) {
+  const isIn = doc.direction === 'in';
+  const rows = [
+    [doc.party_name ? esc(doc.party_name) : '—', isIn ? 'قبض (نقد وارد)' : 'دفع (نقد صادر)', money(doc.amount, settings)],
+    ['', 'الإجمالي', `<b>${money(doc.amount, settings)}</b>`],
+  ];
+  return docShell([settings.factory_name || 'سام بلاستيك', isIn ? 'سند قبض' : 'سند دفع'],
+    meta(doc) + tableHtml(['الطرف', 'النوع', 'المبلغ'], rows)
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+}
+
 function reportTemplate(settings, title, metaLines, headers, rows, foot = '') {
   return docShell([settings.factory_name || 'سام بلاستيك', title],
     `<div class="meta">${metaLines.map(esc).join(' &nbsp; ')}</div>${tableHtml(headers, rows)}${foot}`,
@@ -161,5 +186,6 @@ function reportTemplate(settings, title, metaLines, headers, rows, foot = '') {
 
 module.exports = {
   purchaseTemplate, issueTemplate, receiveTemplate, invoiceTemplate, exitTemplate,
-  tollReceiptTemplate, tollDeliveryTemplate, scrapTemplate, transferTemplate, productionTemplate, reportTemplate,
+  tollReceiptTemplate, tollDeliveryTemplate, scrapTemplate, transferTemplate, productionTemplate,
+  paymentTemplate, returnTemplate, reportTemplate,
 };

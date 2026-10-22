@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, implicationsDialog, renderTable, openModal, esc, itemComboIn } from '../ui.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
 const DISP_LABEL = { to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد', sold_scrap: 'بيع خردة' };
@@ -103,8 +103,7 @@ register('scrap', {
         <div class="form-grid">
           <div class="field"><label>رقم السند *</label><input id="f-num" value="${esc(doc ? doc.doc_number : suggest)}" dir="ltr"></div>
           <div class="field"><label>التاريخ *</label><input id="f-date" type="date" value="${esc(doc ? doc.doc_date : today())}"></div>
-          <div class="field"><label>الصنف *</label>
-            <select id="f-item">${items.map(i => `<option value="${i.id}" ${doc && doc.item_id === i.id ? 'selected' : ''}>${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></div>
+          <div class="field"><label>الصنف *</label><div id="f-item-wrap"></div></div>
           <div class="field"><label>مصير التالف *</label>
             <select id="f-disp">
               ${Object.entries(DISP_LABEL).map(([v, l]) => `<option value="${v}" ${doc && doc.disposition === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -125,7 +124,7 @@ register('scrap', {
               id: doc ? doc.id : null,
               doc_number: b.querySelector('#f-num').value,
               doc_date: b.querySelector('#f-date').value,
-              item_id: Number(b.querySelector('#f-item').value),
+              item_id: Number(b.querySelector('#f-item-wrap .p-item').value),
               disposition: b.querySelector('#f-disp').value,
               warehouse_id: b.querySelector('#f-wh').value ? Number(b.querySelector('#f-wh').value) : null,
               party_id: b.querySelector('#f-party').value ? Number(b.querySelector('#f-party').value) : null,
@@ -140,6 +139,8 @@ register('scrap', {
 
       const itemById = (id) => items.find(i => i.id === id);
       const partyById = (id) => parties.find(p => p.id === id);
+      const combo = itemComboIn(back.querySelector('#f-item-wrap'), items, () => updateVis());
+      if (doc && doc.item_id) combo.setValue(doc.item_id);
       const isCustomerParty = () => {
         const p = partyById(Number(back.querySelector('#f-party').value));
         return p && (p.type === 'customer' || p.type === 'both');
@@ -152,7 +153,7 @@ register('scrap', {
         updateBuckets();
       };
       function updateBuckets() {
-        const item = itemById(Number(back.querySelector('#f-item').value));
+        const item = itemById(Number(back.querySelector('#f-item-wrap .p-item').value));
         const line = back.querySelector('#buckets-line');
         if (!item) { line.textContent = ''; return; }
         if (isCustomerParty()) {
@@ -170,7 +171,6 @@ register('scrap', {
       }
       back.querySelector('#f-disp').onchange = updateVis;
       back.querySelector('#f-party').onchange = updateVis;
-      back.querySelector('#f-item').onchange = updateVis;
       updateVis();
     }
 

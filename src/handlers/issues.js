@@ -62,6 +62,9 @@ module.exports = function register(ipcMain) {
         const hasResults = db.prepare(`SELECT COUNT(*) c FROM production_results pr
           JOIN cartons c ON c.id=pr.carton_id WHERE c.issue_permit_id=?`).get(id).c;
         if (hasResults > 0) throw new Error('لا يمكن تعديل التصريح — توجد نتائج إنتاج مسجلة على كراتينه');
+        const linkedRecv = db.prepare(`SELECT COUNT(*) c FROM receive_permits
+          WHERE issue_permit_id=? AND status='active'`).get(id).c;
+        if (linkedRecv > 0) throw new Error('لا يمكن تعديل التصريح — توجد تصاريح استلام مرتبطة به، ألغِها أولاً');
         oldItems = db.prepare('SELECT * FROM issue_items WHERE issue_permit_id=?').all(id);
         db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);
         db.prepare('DELETE FROM issue_items WHERE issue_permit_id=?').run(id);
@@ -89,7 +92,7 @@ module.exports = function register(ipcMain) {
         if (doc.source === 'own') {
           const bal = getBalance(db, it.item_id, it.warehouse_id);
           if (bal.balance_pieces < pieces) throw new Error(`الرصيد غير كافٍ للصنف ${item.code} (المطلوب ${pieces} حبة والمتوفر ${bal.balance_pieces})`);
-          moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, notes: it.notes });
+          moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket: 'salem', notes: it.notes });
           for (const cn of cartonIds) {
             const r = issueCarton.run(doc.doc_date, id, cn);
             if (r.changes === 0) throw new Error(`الكرتون ${cn} غير متاح في المخزن`);
@@ -114,6 +117,9 @@ module.exports = function register(ipcMain) {
     const hasResults = db.prepare(`SELECT COUNT(*) c FROM production_results pr
       JOIN cartons c ON c.id=pr.carton_id WHERE c.issue_permit_id=?`).get(id).c;
     if (hasResults > 0) throw new Error('لا يمكن إلغاء التصريح — توجد نتائج إنتاج مسجلة على كراتينه، احذفها أولاً');
+    const linkedRecv = db.prepare(`SELECT COUNT(*) c FROM receive_permits
+      WHERE issue_permit_id=? AND status='active'`).get(id).c;
+    if (linkedRecv > 0) throw new Error('لا يمكن إلغاء التصريح — توجد تصاريح استلام مرتبطة به، ألغِها أولاً');
     const oldItems = db.prepare('SELECT * FROM issue_items WHERE issue_permit_id=?').all(id);
     withTransaction(db, () => {
       db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);

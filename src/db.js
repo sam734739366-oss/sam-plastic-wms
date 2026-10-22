@@ -34,29 +34,107 @@ function migrate(d) {
   if (cur && !['YER', 'SAR', 'USD'].includes(cur.value)) {
     d.prepare("UPDATE settings SET value='YER' WHERE key='currency'").run();
   }
-  // أرصدة افتتاحية: كميات سليم/تالف/محرز المحفوظة في جدول الأصناف (من إصدارات سابقة)
-  // تُحوَّل إلى حركات مخزون افتتاحية حتى تظهر في الجرد والتقارير وتصبح قابلة للصرف والبيع.
-  // العملية تراكمية وآمنة: تُنشئ الفرق فقط إن كان المجموع أكبر من صافي الحركات القائمة.
-  const wh = d.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get();
-  if (wh) {
-    const items = d.prepare('SELECT * FROM items').all();
-    const balRows = d.prepare(`SELECT item_id,
-        COALESCE(SUM(qty_in_pieces),0) - COALESCE(SUM(qty_out_pieces),0) bal
-      FROM stock_moves GROUP BY item_id`).all();
-    const balByItem = new Map(balRows.map(r => [r.item_id, r.bal]));
-    const insOpen = d.prepare(`INSERT INTO stock_moves
-      (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
-       qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, notes)
-      VALUES ('opening',?,?,?,?,?,?,0,?,0,?)`);
-    const today = new Date().toISOString().slice(0, 10);
-    for (const it of items) {
-      const total = (Number(it.qty_salem) || 0) + (Number(it.qty_talef) || 0) + (Number(it.qty_muharraz) || 0);
-      const diff = total - (balByItem.get(it.id) || 0);
-      if (diff > 0) {
-        insOpen.run(it.id, `افتتاحي-${it.code}`, today, it.id, wh.id, diff,
-          diff * (Number(it.weight_grams) || 0) / 1000, 'رصيد افتتاحي (سليم/تالف/محرز)');
+  // عمود تصنيف الحركة (سليم/تالف/محرز): يجعل أعمدة الجرد محسوبة لكل مخزن على حدة
+  const moveCols = d.prepare('PRAGMA table_info(stock_moves)').all().map(c => c.name);
+  const hadBucket = moveCols.includes('bucket');
+  if (!hadBucket) {
+    d.exec('ALTER TABLE stock_moves ADD COLUMN bucket TEXT');
+    // ترحيل الحركات القائمة: توزيع السلات حسب نوع المستند
+    d.exec(`UPDATE stock_moves SET bucket='salem' WHERE doc_type IN ('purchase','issue','exit','receive','transfer') AND bucket IS NULL`);
+    d.exec(`UPDATE stock_moves SET bucket='talef' WHERE doc_type='invoice' AND doc_id IN (SELECT id FROM invoices WHERE invoice_type='scrap') AND bucket IS NULL`);
+    d.exec(`UPDATE stock_moves SET bucket='salem' WHERE doc_type='invoice' AND doc_id IN (SELECT id FROM invoices WHERE invoice_type='sale') AND bucket IS NULL`);
+    d.exec(`UPDATE stock_moves SET bucket='muharraz' WHERE doc_type='scrap' AND doc_id IN (SELECT id FROM scrap_movements WHERE disposition='to_recycled') AND bucket IS NULL`);
+    d.exec(`UPDATE stock_moves SET bucket='salem' WHERE doc_type='scrap' AND doc_id IN (SELECT id FROM scrap_movements WHERE disposition='to_stock') AND bucket IS NULL`);
+    d.exec(`UPDATE stock_moves SET bucket='talef' WHERE doc_type='scrap' AND bucket IS NULL AND doc_id IN (SELECT id FROM scrap_movements WHERE talef_take > 0)`);
+    d.exec(`UPDATE stock_moves SET bucket='salem' WHERE bucket IS NULL`);
+    // إعادة بناء الأرصدة الافتتاحية كصفوف مفصولة حسب السلة (سليم/تالف/محرز)
+    const wh0 = d.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get();
+    if (wh0) {
+      d.prepare("DELETE FROM stock_moves WHERE doc_type='opening'").run();
+      const items0 = d.prepare('SELECT * FROM items').all();
+      const insOpen0 = d.prepare(`INSERT INTO stock_moves
+        (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+         qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, bucket, notes)
+        VALUES ('opening',?,?,?,?,?,?,0,?,0,?,?)`);
+      const today0 = new Date().toISOString().slice(0, 10);
+      for (const it of items0) {
+        for (const [key, qty, label] of [
+          ['salem', Number(it.qty_salem) || 0, 'سليم'],
+          ['talef', Number(it.qty_talef) || 0, 'تالف'],
+          ['muharraz', Number(it.qty_muharraz) || 0, 'محرز'],
+        ]) {
+          if (qty > 0) insOpen0.run(it.id, `افتتاحي-${it.code}`, today0, it.id, wh0.id,
+            qty, qty * (Number(it.weight_grams) || 0) / 1000, key, `رصيد افتتاحي (${label})`);
+        }
       }
     }
+  }
+  // أدوار المستخدمين الجديدة (مخازن/حسابات/مبيعات): إعادة بناء جدول المستخدمين لتوسيع قيد الأدوار
+  const userTbl = d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").get();
+  const userRoles = ['manager', 'clerk', 'viewer', 'warehouse', 'accounts', 'sales'];
+  const needsUserRebuild = userTbl && !userRoles.every(r => userTbl.sql.includes(`'${r}'`));
+  if (needsUserRebuild) {
+    d.exec('PRAGMA foreign_keys = OFF');
+    try {
+      d.exec(`CREATE TABLE users_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        full_name TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('manager','clerk','viewer','warehouse','accounts','sales')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+      )`);
+      // نسخ البيانات مع تحمل أعمدة قديمة ناقصة أو قيم فارغة (created_at مثلاً)
+      const uCols = d.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+      const hasU = (c) => uCols.includes(c);
+      const sel = [
+        'id',
+        hasU('username') ? 'username' : "''",
+        hasU('full_name') ? "COALESCE(full_name,'')" : "''",
+        hasU('password_hash') ? "COALESCE(password_hash,'')" : "''",
+        hasU('role') ? "COALESCE(role,'clerk')" : "'clerk'",
+        hasU('created_at') ? "COALESCE(created_at, datetime('now','localtime'))" : "datetime('now','localtime')",
+      ].join(', ');
+      d.exec(`INSERT INTO users_new (id, username, full_name, password_hash, role, created_at)
+        SELECT ${sel} FROM users`);
+      d.exec('DROP TABLE users');
+      d.exec('ALTER TABLE users_new RENAME TO users');
+    } finally {
+      d.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+  // طريقة الدفع (نقدي/آجل) للفواتير + دفتر حركات الأطراف والنقدية
+  const invCols2 = d.prepare('PRAGMA table_info(invoices)').all().map(c => c.name);
+  if (!invCols2.includes('payment_method')) {
+    d.exec(`ALTER TABLE invoices ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit'))`);
+  }
+  const purCols2 = d.prepare('PRAGMA table_info(purchases)').all().map(c => c.name);
+  if (!purCols2.includes('payment_method')) {
+    d.exec(`ALTER TABLE purchases ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit'))`);
+  }
+  // عمود الوحدة في بنود استلام خام العميل (النفخ للغير): اختيار وحدة الصنف وتوابعه
+  const rawItemCols = d.prepare('PRAGMA table_info(customer_raw_items)').all().map(c => c.name);
+  if (!rawItemCols.includes('unit')) {
+    d.exec(`ALTER TABLE customer_raw_items ADD COLUMN unit TEXT NOT NULL DEFAULT 'علبة'`);
+  }
+  // ربط تصريح الاستلام بتصريح الصرف: متابعة دورة الكراتين (نقص/زيادة المستلم مقابل المصروف)
+  const recvCols = d.prepare('PRAGMA table_info(receive_permits)').all().map(c => c.name);
+  if (!recvCols.includes('issue_permit_id')) {
+    d.exec(`ALTER TABLE receive_permits ADD COLUMN issue_permit_id INTEGER REFERENCES issue_permits(id)`);
+  }
+  // ترحيل الفواتير القديمة للدفتر كآجلة (بلا لمس النقدية بأثر رجعي)
+  const ledCount = d.prepare('SELECT COUNT(*) c FROM party_ledger').get().c;
+  if (ledCount === 0) {
+    d.exec(`INSERT INTO party_ledger (party_id, doc_type, doc_id, doc_number, doc_date, side, amount, cash_in, cash_out, notes)
+      SELECT p.party_id, 'invoice', p.id, p.doc_number, p.doc_date, 'debit',
+        COALESCE((SELECT SUM(total_price) FROM invoice_items WHERE invoice_id=p.id),0), 0, 0,
+        'فاتورة ' || p.invoice_type
+      FROM invoices p WHERE p.status='active' AND p.party_id IS NOT NULL`);
+    d.exec(`INSERT INTO party_ledger (party_id, doc_type, doc_id, doc_number, doc_date, side, amount, cash_in, cash_out, notes)
+      SELECT p.party_id, 'purchase', p.id, p.doc_number, p.doc_date, 'credit',
+        COALESCE((SELECT SUM(total_price) FROM purchase_items WHERE purchase_id=p.id),0), 0, 0,
+        'فاتورة شراء'
+      FROM purchases p WHERE p.status='active' AND p.party_id IS NOT NULL`);
   }
 }
 
@@ -108,4 +186,4 @@ function seed(d) {
   if (!s.get('currency')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('currency', 'YER');
 }
 
-module.exports = { getDb, setDb, withTransaction, dataDir };
+module.exports = { getDb, setDb, withTransaction, migrate, dataDir };

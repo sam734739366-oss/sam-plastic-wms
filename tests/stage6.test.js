@@ -43,6 +43,14 @@ function buckets(db, id = 1) {
   return db.prepare('SELECT qty_salem s, qty_talef t, qty_muharraz m FROM items WHERE id=?').get(id);
 }
 
+// إدخال رصيد سلة فعلي في المخزن كحركات (مثل تالف نتيجة إنتاج أو رصيد افتتاحي)
+function stockBucketIn(db, itemId, warehouseId, bucket, pieces) {
+  db.prepare(`INSERT INTO stock_moves
+    (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id, qty_in_pieces, bucket)
+    VALUES ('opening',?,?,?,?,?,?,?)`)
+    .run(itemId, `مخزون-${bucket}`, '2026-10-17', itemId, warehouseId, pieces, bucket);
+}
+
 test('sales:save sale moves stock out with balance check, totals, and deducts salem', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales']);
@@ -126,6 +134,8 @@ test('scrap to_recycled deducts talef first then salem, adds muharraz, edit re-a
   const db = makeDb(); setDb(db);
   const h = stubIpc(['scrap']);
   db.prepare('UPDATE items SET qty_salem=300, qty_talef=100 WHERE id=1').run();
+  stockBucketIn(db, 1, 2, 'salem', 300);
+  stockBucketIn(db, 1, 2, 'talef', 100);
   const { id } = h['scrap:save'](null, {
     doc_number: '1', doc_date: '2026-10-18', item_id: 1, disposition: 'to_recycled',
     warehouse_id: 2, pieces: 150, weight_kg: 0
@@ -134,7 +144,7 @@ test('scrap to_recycled deducts talef first then salem, adds muharraz, edit re-a
   assert.equal(b1.t, 0);
   assert.equal(b1.s, 250);
   assert.equal(b1.m, 150);
-  assert.equal(getBalance(db, 1, 2).balance_pieces, 150);
+  assert.equal(getBalance(db, 1, 2).balance_pieces, 400);
   // تعديل: عكس القديم بدقة ثم تطبيق الجديد
   h['scrap:save'](null, {
     id, doc_number: '1', doc_date: '2026-10-18', item_id: 1, disposition: 'to_recycled',
@@ -144,13 +154,14 @@ test('scrap to_recycled deducts talef first then salem, adds muharraz, edit re-a
   assert.equal(b2.t, 60);
   assert.equal(b2.s, 300);
   assert.equal(b2.m, 40);
-  assert.equal(getBalance(db, 1, 2).balance_pieces, 40);
+  assert.equal(getBalance(db, 1, 2).balance_pieces, 400);
 });
 
 test('scrap to_stock returns talef as salem into warehouse', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['scrap']);
   db.prepare('UPDATE items SET qty_salem=0, qty_talef=80 WHERE id=1').run();
+  stockBucketIn(db, 1, 2, 'talef', 80);
   h['scrap:save'](null, {
     doc_number: '1', doc_date: '2026-10-18', item_id: 1, disposition: 'to_stock',
     warehouse_id: 2, pieces: 80
@@ -161,20 +172,22 @@ test('scrap to_stock returns talef as salem into warehouse', () => {
   assert.equal(getBalance(db, 1, 2).balance_pieces, 80);
 });
 
-test('scrap to_supplier records without moves, deducts buckets, void reverses', () => {
+test('scrap to_supplier moves stock out of warehouse, deducts buckets, void reverses', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['scrap']);
   db.prepare('UPDATE items SET qty_salem=200, qty_talef=100 WHERE id=1').run();
+  stockBucketIn(db, 1, 2, 'talef', 100);
   const { id } = h['scrap:save'](null, {
     doc_number: '1', doc_date: '2026-10-18', item_id: 1, disposition: 'to_supplier',
-    party_id: 1, pieces: 60
+    party_id: 1, warehouse_id: 2, pieces: 60
   }, 1);
-  assert.equal(db.prepare('SELECT COUNT(*) c FROM stock_moves').get().c, 0);
+  assert.equal(getBalance(db, 1, 2).balance_pieces, 40);
   assert.equal(buckets(db).t, 40);
   assert.equal(buckets(db).s, 200);
   h['scrap:void'](null, id, 1);
   assert.equal(db.prepare('SELECT status FROM scrap_movements WHERE id=?').get(id).status, 'void');
   assert.equal(buckets(db).t, 100);
+  assert.equal(getBalance(db, 1, 2).balance_pieces, 100);
 });
 
 test('scrap sold_scrap checks warehouse balance and deducts buckets', () => {

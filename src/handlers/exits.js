@@ -65,7 +65,7 @@ module.exports = function register(ipcMain) {
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         const bal = getBalance(db, it.item_id, it.warehouse_id);
         if (bal.balance_pieces < pieces) throw new Error(`الرصيد غير كافٍ للصنف ${item.code} (المطلوب ${pieces} حبة والمتوفر ${bal.balance_pieces})`);
-        moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, notes: it.notes });
+        moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket: 'salem', notes: it.notes });
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, it.notes || null);
       }
       writeMoves(db, 'exit', id, number, doc.doc_date, moves, userId);

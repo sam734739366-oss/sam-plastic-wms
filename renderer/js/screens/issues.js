@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, implicationsDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, implicationsDialog, renderTable, openModal, esc , itemCombo} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtNum, today } from '../fmt.js';
 
@@ -155,7 +155,7 @@ register('issues', {
               unit: r.querySelector('.p-unit').value,
               carton_ids: r._cartons || [],
               notes: r.querySelector('.p-notes').value,
-            }));
+            })).filter(x => x.item_id);
             await api.invoke('issues:save', {
               id: doc ? doc.id : null,
               doc_number: b.querySelector('#f-num').value,
@@ -196,7 +196,7 @@ register('issues', {
         const row = document.createElement('tr');
         row.className = 'irow';
         row.innerHTML = `
-          <td><select class="p-item">${items.map(i => `<option value="${i.id}">${esc(i.code)} — ${esc(i.name)}</option>`).join('')}</select></td>
+          <td class="p-item-td"></td>
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
@@ -204,6 +204,8 @@ register('issues', {
           <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
           <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
+        const combo = itemCombo(items, () => row.querySelector('.p-item').dispatchEvent(new Event('change')));
+        row.querySelector('.p-item-td').appendChild(combo.box);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
 
         const itemSel = row.querySelector('.p-item');
@@ -272,7 +274,7 @@ register('issues', {
         unitSel.onchange = refreshRow;
         qty.oninput = updateTotal;
         row._refresh = refreshRow;
-        if (data.item_id) itemSel.value = String(data.item_id);
+        if (data.item_id) combo.setValue(data.item_id);
         if (data.warehouse_id) whSel.value = String(data.warehouse_id);
         refreshRow();
       }

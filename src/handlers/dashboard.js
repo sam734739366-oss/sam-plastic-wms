@@ -1,4 +1,5 @@
 const { getDb } = require('../db');
+const ledger = require('../ledger');
 
 function monthRange() {
   const now = new Date();
@@ -35,6 +36,8 @@ module.exports = function register(ipcMain) {
       FROM invoice_items ii JOIN invoices inv ON inv.id=ii.invoice_id
       WHERE inv.status='active' AND inv.doc_date BETWEEN ? AND ?`).get(from, to).t;
     const pendingCartons = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE status='in_stock'`).get().c;
+    const cash = ledger.cashBalance(db);
+    const recv = ledger.receivables(db);
     return {
       items_count: itemsCount,
       salem_pieces: buckets.salem,
@@ -44,6 +47,9 @@ module.exports = function register(ipcMain) {
       month_purchases: monthPurchases,
       month_sales: monthSales,
       pending_cartons: pendingCartons,
+      cash_balance: cash,
+      customers_due: recv.customers,
+      suppliers_due: recv.suppliers,
     };
   });
 };
