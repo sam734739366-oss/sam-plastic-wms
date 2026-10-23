@@ -82,10 +82,14 @@ function migrate(d) {
       }
     }
   }
-  // أدوار المستخدمين الجديدة (مخازن/حسابات/مبيعات): إعادة بناء جدول المستخدمين لتوسيع قيد الأدوار
+  // أدوار المستخدمين (مدير/إدخال عام/عرض فقط/مخازن): إعادة بناء جدول المستخدمين لتوسيع قيد الأدوار
+  // وإسقاط دورَي «حسابات» و«مبيعات» الملغيين — من كان دورهما يتحول إلى إدخال عام.
   const userTbl = d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").get();
-  const userRoles = ['manager', 'clerk', 'viewer', 'warehouse', 'accounts', 'sales'];
-  const needsUserRebuild = userTbl && !userRoles.every(r => userTbl.sql.includes(`'${r}'`));
+  const userRoles = ['manager', 'clerk', 'viewer', 'warehouse'];
+  const needsUserRebuild = userTbl && (
+    !userRoles.every(r => userTbl.sql.includes(`'${r}'`)) ||
+    userTbl.sql.includes("'accounts'") || userTbl.sql.includes("'sales'")
+  );
   if (needsUserRebuild) {
     d.exec('PRAGMA foreign_keys = OFF');
     try {
@@ -94,10 +98,11 @@ function migrate(d) {
         username TEXT NOT NULL UNIQUE,
         full_name TEXT NOT NULL,
         password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('manager','clerk','viewer','warehouse','accounts','sales')),
+        role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('manager','clerk','viewer','warehouse')),
         created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
       )`);
       // نسخ البيانات مع تحمل أعمدة قديمة ناقصة أو قيم فارغة (created_at مثلاً)
+      // وأصحاب الأدوار الملغاة (حسابات/مبيعات) ينتقلون إلى دور «إدخال عام»
       const uCols = d.prepare('PRAGMA table_info(users)').all().map(c => c.name);
       const hasU = (c) => uCols.includes(c);
       const sel = [
@@ -105,7 +110,7 @@ function migrate(d) {
         hasU('username') ? 'username' : "''",
         hasU('full_name') ? "COALESCE(full_name,'')" : "''",
         hasU('password_hash') ? "COALESCE(password_hash,'')" : "''",
-        hasU('role') ? "COALESCE(role,'clerk')" : "'clerk'",
+        hasU('role') ? "CASE WHEN COALESCE(role,'clerk') IN ('accounts','sales') THEN 'clerk' ELSE COALESCE(role,'clerk') END" : "'clerk'",
         hasU('created_at') ? "COALESCE(created_at, datetime('now','localtime'))" : "datetime('now','localtime')",
       ].join(', ');
       d.exec(`INSERT INTO users_new (id, username, full_name, password_hash, role, created_at)

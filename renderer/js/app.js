@@ -37,7 +37,7 @@ if (!u) location.href = 'index.html';
 
 const roleLabel = {
   manager: 'مدير', clerk: 'إدخال عام', viewer: 'عرض فقط',
-  warehouse: 'مخازن', accounts: 'حسابات', sales: 'مبيعات',
+  warehouse: 'مخازن',
 };
 document.getElementById('current-user').textContent = `${u.full_name} (${roleLabel[u.role] || u.role})`;
 document.getElementById('logout').onclick = () => { sessionStorage.clear(); location.href = 'index.html'; };
@@ -46,15 +46,13 @@ document.getElementById('logout').onclick = () => { sessionStorage.clear(); loca
 const ROLE_SCREENS = {
   manager: null,
   clerk: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
-    'purchases', 'issues', 'production', 'receives', 'cartons', 'sales', 'returns', 'exits',
-    'scrap', 'tolling', 'transfers', 'payments', 'statements', 'stock', 'reports'],
+    'purchases', 'issues', 'production', 'receives', 'cartons', 'returns',
+    'scrap', 'tolling', 'transfers', 'stock', 'reports'],
   viewer: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
-    'purchases', 'issues', 'production', 'receives', 'cartons', 'sales', 'returns', 'exits',
-    'scrap', 'tolling', 'transfers', 'payments', 'statements', 'stock', 'reports', 'audit'],
+    'purchases', 'issues', 'production', 'receives', 'cartons', 'returns',
+    'scrap', 'tolling', 'transfers', 'stock', 'reports', 'audit'],
   warehouse: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
     'purchases', 'issues', 'production', 'receives', 'cartons', 'scrap', 'transfers', 'stock', 'returns', 'reports'],
-  sales: ['dashboard', 'items', 'parties', 'sales', 'returns', 'exits', 'tolling', 'statements', 'reports'],
-  accounts: ['dashboard', 'parties', 'payments', 'statements', 'reports', 'audit'],
 };
 const allowed = (screen) => {
   const list = ROLE_SCREENS[u.role];
@@ -103,14 +101,10 @@ import './screens/issues.js';
 import './screens/production.js';
 import './screens/receives.js';
 import './screens/cartons.js';
-import './screens/sales.js';
 import './screens/returns.js';
-import './screens/exits.js';
 import './screens/scrap.js';
 import './screens/tolling.js';
 import './screens/transfers.js';
-import './screens/payments.js';
-import './screens/statements.js';
 import './screens/stock.js';
 import './screens/reports.js';
 import './screens/audit.js';

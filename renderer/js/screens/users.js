@@ -4,11 +4,11 @@ import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
 
 const ROLE_LABEL = {
   manager: 'مدير', clerk: 'إدخال عام', viewer: 'عرض فقط',
-  warehouse: 'مخازن', accounts: 'حسابات', sales: 'مبيعات',
+  warehouse: 'مخازن',
 };
 const ROLE_TAG = {
   manager: 'salem', clerk: 'new', viewer: 'muharraz',
-  warehouse: 'new', accounts: 'muharraz', sales: 'recycled',
+  warehouse: 'new',
 };
 
 register('users', {
@@ -76,8 +76,6 @@ register('users', {
           <div class="field"><label>الدور</label><select id="f-role">
             <option value="manager" ${row?.role === 'manager' ? 'selected' : ''}>مدير (صلاحية كاملة)</option>
             <option value="warehouse" ${row?.role === 'warehouse' ? 'selected' : ''}>مخازن (الأصناف والمخازن والشراء والإنتاج والتالف والنقل)</option>
-            <option value="sales" ${row?.role === 'sales' ? 'selected' : ''}>مبيعات (البيع والمرتجعات والخروج والنفخ للغير)</option>
-            <option value="accounts" ${row?.role === 'accounts' ? 'selected' : ''}>حسابات (القبض والدفع والكشوفات والتقارير)</option>
             <option value="clerk" ${row?.role === 'clerk' ? 'selected' : ''}>إدخال عام (كل المستندات)</option>
             <option value="viewer" ${row?.role === 'viewer' ? 'selected' : ''}>عرض فقط</option>
           </select></div>

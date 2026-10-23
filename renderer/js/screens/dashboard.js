@@ -11,16 +11,15 @@ function card(id, iconSvg, label, tone) {
 const emptyHtml = (msg) => `<div class="chart-empty">${msg}</div>`;
 
 function renderCharts(root, c) {
-  const hasMonthly = c.monthly.some((m) => Number(m.purchases) > 0 || Number(m.sales) > 0);
+  const hasMonthly = c.monthly.some((m) => Number(m.purchases) > 0);
   root.querySelector('#ch-monthly').innerHTML = hasMonthly
     ? monthlyBars({
       labels: c.monthly.map((m) => m.label),
       series: [
         { name: 'مشتريات', color: '#3b6cf0', values: c.monthly.map((m) => m.purchases) },
-        { name: 'مبيعات', color: '#16a34a', values: c.monthly.map((m) => m.sales) },
       ],
     })
-    : emptyHtml('لا توجد مشتريات أو مبيعات خلال آخر 6 أشهر');
+    : emptyHtml('لا توجد مشتريات خلال آخر 6 أشهر');
 
   root.querySelector('#ch-buckets').innerHTML = donut({
     segments: [
@@ -29,12 +28,6 @@ function renderCharts(root, c) {
       { label: 'محرز', value: c.buckets[2].value, color: '#6d28d9' },
     ],
   }) || emptyHtml('لا يوجد مخزون مسجّل بعد');
-
-  const finRows = c.financial;
-  const hasFin = finRows.some((r) => Number(r.value) > 0);
-  root.querySelector('#ch-fin').innerHTML = hasFin
-    ? hBars({ rows: finRows, color: '#2450c8', color2: '#8fb4ff', fmt: (v) => fmtMoney(v) })
-    : emptyHtml('لا توجد أرصدة مالية بعد');
 
   const topRows = c.top_items.map((t) => ({ label: t.name, value: t.qty }));
   root.querySelector('#ch-top').innerHTML = topRows.length
@@ -59,7 +52,7 @@ register('dashboard', {
       <div class="dash-head" style="margin-bottom:18px">
         <div>
           <h2 style="margin:0;font-size:20px;color:#0f172a">نظرة عامة على المصنع</h2>
-          <p class="muted" style="margin:4px 0 0">مؤشرات المخزون والحركة اليومية والحسابات</p>
+          <p class="muted" style="margin:4px 0 0">مؤشرات المخزون والحركة اليومية والإنتاج</p>
         </div>
         <button id="btn-guide" class="btn guide-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h6M9 11h5"/></svg>
@@ -73,24 +66,16 @@ register('dashboard', {
         ${card('s-muharraz', ICONS.layers, 'رصيد محرز (حبة)', 't4')}
         ${card('s-today', ICONS.docs, 'مستندات اليوم', 't2')}
         ${card('s-purchases', ICONS.coins, 'مشتريات الشهر', 't1')}
-        ${card('s-sales', ICONS.coins, 'مبيعات الشهر', 't3')}
         ${card('s-cartons', ICONS.carton, 'كراتين معلقة بالمخزن', 't4')}
-        ${card('s-cash', ICONS.coins, 'رصيد النقدية', 't1')}
-        ${card('s-cust', ICONS.warn, 'ذمم العملاء (لنا)', 't3')}
-        ${card('s-supp', ICONS.warn, 'ذمم الموردين (علينا)', 't2')}
       </div>
       <div class="charts-grid">
         <div class="card">
-          <h2>المبيعات والمشتريات — آخر 6 أشهر</h2>
+          <h2>المشتريات — آخر 6 أشهر</h2>
           <div id="ch-monthly"></div>
         </div>
         <div class="card">
           <h2>توزيع المخزون (سليم / تالف / محرز)</h2>
           <div id="ch-buckets"></div>
-        </div>
-        <div class="card">
-          <h2>المركز المالي</h2>
-          <div id="ch-fin"></div>
         </div>
         <div class="card">
           <h2>أعلى الأصناف رصيداً سليماً</h2>
@@ -106,11 +91,7 @@ register('dashboard', {
       el.querySelector('#s-muharraz').textContent = fmtNum(d.muharraz_pieces, 0);
       el.querySelector('#s-today').textContent = d.today_docs;
       el.querySelector('#s-purchases').textContent = fmtMoney(d.month_purchases);
-      el.querySelector('#s-sales').textContent = fmtMoney(d.month_sales);
       el.querySelector('#s-cartons').textContent = d.pending_cartons;
-      el.querySelector('#s-cash').textContent = fmtMoney(d.cash_balance);
-      el.querySelector('#s-cust').textContent = fmtMoney(d.customers_due);
-      el.querySelector('#s-supp').textContent = fmtMoney(d.suppliers_due);
     } catch (e) { /* لا شيء */ }
     try {
       const c = await api.invoke('dashboard:charts');

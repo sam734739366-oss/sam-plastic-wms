@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const { getDb } = require('../db');
 const { audit } = require('../audit');
 
-const ROLES = ['manager', 'clerk', 'viewer', 'warehouse', 'accounts', 'sales'];
+const ROLES = ['manager', 'clerk', 'viewer', 'warehouse'];
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('users:list', () => getDb().prepare('SELECT id, username, full_name, role, created_at FROM users ORDER BY id').all());
