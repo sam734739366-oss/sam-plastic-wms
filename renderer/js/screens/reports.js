@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api } from '../api.js';
-import { toast, esc } from '../ui.js';
+import { toast, esc, openModal } from '../ui.js';
 import { fmtMoney } from '../fmt.js';
 
 const N = (n, d = 0) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: d });
@@ -41,18 +41,19 @@ register('reports', {
           warehouseId: Number(el.querySelector('#r-warehouse').value) || null,
         }),
         columns: [
-          { label: 'الكود', cell: r => r.code },
-          { label: 'الصنف', cell: r => r.name },
-          { label: 'الوحدة', cell: r => r.unit_name },
-          { label: 'الرصيد المخزني', cell: r => r.balance_label },
-          { label: 'سليم', cell: r => N(r.qty_salem) },
-          { label: 'تالف', cell: r => N(r.qty_talef) },
-          { label: 'محرز', cell: r => N(r.qty_muharraz) },
-          { label: 'الوزن كجم', cell: r => N(r.balance_kg, 2) },
+          { key: 'code', label: 'الكود', cell: r => r.code },
+          { key: 'name', label: 'الصنف', cell: r => r.name },
+          { key: 'unit_name', label: 'الوحدة', cell: r => r.unit_name },
+          { key: 'balance_label', label: 'الرصيد المخزني', cell: r => r.balance_label },
+          { key: 'qty_salem', label: 'سليم', cell: r => N(r.qty_salem) },
+          { key: 'qty_talef', label: 'تالف', cell: r => N(r.qty_talef) },
+          { key: 'qty_muharraz', label: 'محرز', cell: r => N(r.qty_muharraz) },
+          { key: 'balance_kg', label: 'الوزن كجم', weight: true, cell: r => N(r.balance_kg, 2) },
         ],
-        foot: (data) => {
+        foot: (data, cols) => {
           const rows = Array.isArray(data) ? data : data.rows;
-          return `<div class="notes"><b>عدد الأصناف: ${rows.length} — إجمالي الحبات: ${N(rows.reduce((s, r) => s + (Number(r.balance_pieces) || 0), 0))} — إجمالي الوزن: ${N(rows.reduce((s, r) => s + (Number(r.balance_kg) || 0), 0), 2)} كجم</b></div>`;
+          const showW = cols.some(c => c.key === 'balance_kg');
+          return `<div class="notes"><b>عدد الأصناف: ${rows.length} — إجمالي الحبات: ${N(rows.reduce((s, r) => s + (Number(r.balance_pieces) || 0), 0))}${showW ? ` — إجمالي الوزن: ${N(rows.reduce((s, r) => s + (Number(r.balance_kg) || 0), 0), 2)} كجم` : ''}</b></div>`;
         },
       },
       movement: {
@@ -69,26 +70,27 @@ register('reports', {
           to: el.querySelector('#r-to').value || null,
         }),
         columns: [
-          { label: 'التاريخ', cell: r => r.doc_date },
-          { label: 'النوع', cell: r => DOC_LABEL[r.doc_type] || r.doc_type },
-          { label: 'الرقم', cell: r => r.doc_number },
-          { label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
-          { label: 'المخزن', cell: r => r.warehouse_name },
-          { label: 'داخل (حبة)', cell: r => N(r.qty_in_pieces) },
-          { label: 'خارج (حبة)', cell: r => N(r.qty_out_pieces) },
-          { label: 'الرصيد', cell: r => r.balance_label },
-          { label: 'داخل كجم', cell: r => N(r.weight_in_kg, 2) },
-          { label: 'خارج كجم', cell: r => N(r.weight_out_kg, 2) },
-          { label: 'الرصيد كجم', cell: r => N(r.balance_kg, 2) },
-          { label: 'ملاحظات', cell: r => r.notes || '' },
+          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
+          { key: 'doc_type', label: 'النوع', cell: r => DOC_LABEL[r.doc_type] || r.doc_type },
+          { key: 'doc_number', label: 'الرقم', cell: r => r.doc_number },
+          { key: 'item', label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
+          { key: 'warehouse_name', label: 'المخزن', cell: r => r.warehouse_name },
+          { key: 'qty_in_pieces', label: 'داخل (حبة)', cell: r => N(r.qty_in_pieces) },
+          { key: 'qty_out_pieces', label: 'خارج (حبة)', cell: r => N(r.qty_out_pieces) },
+          { key: 'balance_label', label: 'الرصيد', cell: r => r.balance_label },
+          { key: 'weight_in_kg', label: 'داخل كجم', weight: true, cell: r => N(r.weight_in_kg, 2) },
+          { key: 'weight_out_kg', label: 'خارج كجم', weight: true, cell: r => N(r.weight_out_kg, 2) },
+          { key: 'balance_kg', label: 'الرصيد كجم', weight: true, cell: r => N(r.balance_kg, 2) },
+          { key: 'notes', label: 'ملاحظات', cell: r => r.notes || '' },
         ],
-        foot: (data) => {
+        foot: (data, cols) => {
           const rows = Array.isArray(data) ? data : data.rows;
           const pin = rows.reduce((s, r) => s + (Number(r.qty_in_pieces) || 0), 0);
           const pout = rows.reduce((s, r) => s + (Number(r.qty_out_pieces) || 0), 0);
+          const showW = cols.some(c => c.weight);
           const win = rows.reduce((s, r) => s + (Number(r.weight_in_kg) || 0), 0);
           const wout = rows.reduce((s, r) => s + (Number(r.weight_out_kg) || 0), 0);
-          return `<div class="notes"><b>الإجمالي — داخل: ${N(pin)} حبة — خارج: ${N(pout)} حبة — الصافي: ${N(pin - pout)} حبة &nbsp;|&nbsp; الوزن: داخل ${N(win, 2)} كجم — خارج ${N(wout, 2)} كجم — الصافي ${N(win - wout, 2)} كجم</b></div>`;
+          return `<div class="notes"><b>الإجمالي — داخل: ${N(pin)} حبة — خارج: ${N(pout)} حبة — الصافي: ${N(pin - pout)} حبة${showW ? ` &nbsp;|&nbsp; الوزن: داخل ${N(win, 2)} كجم — خارج ${N(wout, 2)} كجم — الصافي ${N(win - wout, 2)} كجم` : ''}</b></div>`;
         },
       },
       production: {
@@ -103,17 +105,17 @@ register('reports', {
           machineId: Number(el.querySelector('#r-machine').value) || null,
         }),
         columns: [
-          { label: 'التاريخ', cell: r => r.result_date },
-          { label: 'الكرتون', cell: r => r.carton_number },
-          { label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
-          { label: 'تصريح الصرف', cell: r => r.issue_number },
-          { label: 'المكينة', cell: r => r.machine_name || '—' },
-          { label: 'الوردية', cell: r => r.shift_name || '—' },
-          { label: 'سليم', cell: r => N(r.good_pieces) },
-          { label: 'تالف قبل', cell: r => N(r.defect_before) },
-          { label: 'تالف بعد', cell: r => N(r.defect_after) },
-          { label: 'الإجمالي', cell: r => N(r.total_pieces) },
-          { label: 'ملاحظات', cell: r => r.notes || '' },
+          { key: 'result_date', label: 'التاريخ', cell: r => r.result_date },
+          { key: 'carton_number', label: 'الكرتون', cell: r => r.carton_number },
+          { key: 'item', label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
+          { key: 'issue_number', label: 'تصريح الصرف', cell: r => r.issue_number },
+          { key: 'machine_name', label: 'المكينة', cell: r => r.machine_name || '—' },
+          { key: 'shift_name', label: 'الوردية', cell: r => r.shift_name || '—' },
+          { key: 'good_pieces', label: 'سليم', cell: r => N(r.good_pieces) },
+          { key: 'defect_before', label: 'تالف قبل', cell: r => N(r.defect_before) },
+          { key: 'defect_after', label: 'تالف بعد', cell: r => N(r.defect_after) },
+          { key: 'total_pieces', label: 'الإجمالي', cell: r => N(r.total_pieces) },
+          { key: 'notes', label: 'ملاحظات', cell: r => r.notes || '' },
         ],
         foot: (data) => {
           const rows = Array.isArray(data) ? data : data.rows;
@@ -133,19 +135,20 @@ register('reports', {
           to: el.querySelector('#r-to').value || null,
         }),
         columns: [
-          { label: 'الرقم', cell: r => r.doc_number },
-          { label: 'التاريخ', cell: r => r.doc_date },
-          { label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
-          { label: 'المصير', cell: r => DISP_LABEL[r.disposition] || r.disposition },
-          { label: 'المخزن', cell: r => r.warehouse_name || '—' },
-          { label: 'الطرف', cell: r => r.party_name || '—' },
-          { label: 'الحبات', cell: r => N(r.pieces) },
-          { label: 'الوزن كجم', cell: r => N(r.weight_kg, 2) },
-          { label: 'السعر', cell: r => r.price ? N(r.price, 2) : '—' },
+          { key: 'doc_number', label: 'الرقم', cell: r => r.doc_number },
+          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
+          { key: 'item', label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
+          { key: 'disposition', label: 'المصير', cell: r => DISP_LABEL[r.disposition] || r.disposition },
+          { key: 'warehouse_name', label: 'المخزن', cell: r => r.warehouse_name || '—' },
+          { key: 'party_name', label: 'الطرف', cell: r => r.party_name || '—' },
+          { key: 'pieces', label: 'الحبات', cell: r => N(r.pieces) },
+          { key: 'weight_kg', label: 'الوزن كجم', weight: true, cell: r => N(r.weight_kg, 2) },
+          { key: 'price', label: 'السعر', cell: r => r.price ? N(r.price, 2) : '—' },
         ],
-        foot: (data) => {
+        foot: (data, cols) => {
           const rows = Array.isArray(data) ? data : data.rows;
-          return `<div class="notes"><b>إجمالي الحبات: ${N(rows.reduce((s, r) => s + r.pieces, 0))} — الوزن: ${N(rows.reduce((s, r) => s + r.weight_kg, 0), 2)} كجم</b></div>`;
+          const showW = cols.some(c => c.key === 'weight_kg');
+          return `<div class="notes"><b>إجمالي الحبات: ${N(rows.reduce((s, r) => s + r.pieces, 0))}${showW ? ` — الوزن: ${N(rows.reduce((s, r) => s + r.weight_kg, 0), 2)} كجم` : ''}</b></div>`;
         },
       },
       purchases: {
@@ -160,11 +163,11 @@ register('reports', {
           partyId: Number(el.querySelector('#r-party').value) || null,
         }),
         columns: [
-          { label: 'الرقم', cell: r => r.doc_number },
-          { label: 'التاريخ', cell: r => r.doc_date },
-          { label: 'المورد', cell: r => r.party_name || '—' },
-          { label: 'الحبات', cell: r => N(r.total_pieces) },
-          { label: 'الإجمالي', cell: r => fmtMoney(r.total) },
+          { key: 'doc_number', label: 'الرقم', cell: r => r.doc_number },
+          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
+          { key: 'party_name', label: 'المورد', cell: r => r.party_name || '—' },
+          { key: 'total_pieces', label: 'الحبات', cell: r => N(r.total_pieces) },
+          { key: 'total', label: 'الإجمالي', cell: r => fmtMoney(r.total) },
         ],
         foot: (data) => `<div class="notes"><b>إجمالي المشتريات: ${fmtMoney(data.total)} — عدد الفواتير: ${data.rows.length}</b></div>`,
       },
@@ -180,66 +183,128 @@ register('reports', {
           userId: Number(el.querySelector('#r-user').value) || null,
         }),
         columns: [
-          { label: 'الوقت', cell: r => r.created_at },
-          { label: 'المستخدم', cell: r => r.user_name || '—' },
-          { label: 'الإجراء', cell: r => ACTION_LABEL[r.action] || r.action },
-          { label: 'الكيان', cell: r => r.entity },
-          { label: 'رقم السجل', cell: r => r.entity_id ?? '' },
+          { key: 'created_at', label: 'الوقت', cell: r => r.created_at },
+          { key: 'user_name', label: 'المستخدم', cell: r => r.user_name || '—' },
+          { key: 'action', label: 'الإجراء', cell: r => ACTION_LABEL[r.action] || r.action },
+          { key: 'entity', label: 'الكيان', cell: r => r.entity },
+          { key: 'entity_id', label: 'رقم السجل', cell: r => r.entity_id ?? '' },
         ],
       },
     };
 
-    el.innerHTML = `
-      <div class="toolbar">
-        <select id="r-kind">${Object.entries(REPORTS).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('')}</select>
-        <button class="btn primary" id="btn-run">عرض التقرير</button>
-        <span class="spacer"></span>
-        <button class="btn" id="btn-print" disabled>طباعة A4</button>
-        <button class="btn" id="btn-export" disabled>تصدير CSV</button>
-      </div>
-      <div class="toolbar" id="filters"></div>
-      <div id="table-wrap"></div>`;
+    const COL_KEY = (kind) => `report-cols:${kind}`;
+    const visibleOf = (kind) => {
+      const all = REPORTS[kind].columns;
+      try {
+        const saved = JSON.parse(localStorage.getItem(COL_KEY(kind)) || 'null');
+        if (Array.isArray(saved)) {
+          const keys = saved.filter(k => all.some(c => c.key === k));
+          if (keys.length) return keys;
+        }
+      } catch { /* تجاهل */ }
+      return all.filter(c => !c.weight).map(c => c.key);
+    };
+    const saveCols = (kind, keys) => localStorage.setItem(COL_KEY(kind), JSON.stringify(keys));
 
+    let kind = 'inventory';
+    let last = null;
+
+    el.innerHTML = `
+      <div class="report-tabs" id="r-tabs"></div>
+      <div class="card">
+        <div class="toolbar" id="filters"></div>
+        <div class="toolbar">
+          <button class="btn primary" id="btn-run">عرض التقرير</button>
+          <button class="btn" id="btn-cols">الأعمدة</button>
+          <span class="spacer"></span>
+          <button class="btn" id="btn-print" disabled>طباعة A4</button>
+          <button class="btn" id="btn-export" disabled>تصدير CSV</button>
+        </div>
+        <div id="table-wrap"></div>
+      </div>`;
+
+    const tabsEl = el.querySelector('#r-tabs');
     const filtersEl = el.querySelector('#filters');
     const tableWrap = el.querySelector('#table-wrap');
     const btnPrint = el.querySelector('#btn-print');
     const btnExport = el.querySelector('#btn-export');
-    let last = null;
 
-    function renderFilters(kind) {
+    function renderTabs() {
+      tabsEl.innerHTML = Object.entries(REPORTS)
+        .map(([k, r]) => `<button class="tab-btn${k === kind ? ' active' : ''}" data-kind="${k}">${esc(r.label)}</button>`)
+        .join('');
+      tabsEl.querySelectorAll('.tab-btn').forEach(b => {
+        b.onclick = () => { kind = b.dataset.kind; renderTabs(); renderFilters(); run(); };
+      });
+    }
+    function renderFilters() {
       filtersEl.innerHTML = `<div class="form-grid inline">${REPORTS[kind].filterHtml()}</div>`;
     }
-
+    function visibleCols() {
+      const keys = visibleOf(kind);
+      return REPORTS[kind].columns.filter(c => keys.includes(c.key));
+    }
     async function run() {
-      const kind = el.querySelector('#r-kind').value;
       const r = REPORTS[kind];
+      const cols = visibleCols();
       try {
         const data = await api.invoke('reports:' + kind, r.getFilters(el));
         const rows = Array.isArray(data) ? data : data.rows;
-        last = { kind, data, cells: rows.map(row => r.columns.map(c => c.cell(row))) };
-        tableWrap.innerHTML = tableHtml(r.columns, last.cells);
-        if (r.foot) tableWrap.insertAdjacentHTML('beforeend', r.foot(data));
+        last = { kind, data, cols, cells: rows.map(row => cols.map(c => c.cell(row))) };
+        tableWrap.innerHTML = tableHtml(cols, last.cells);
+        if (r.foot) tableWrap.insertAdjacentHTML('beforeend', r.foot(data, cols));
         btnPrint.disabled = false;
         btnExport.disabled = false;
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
-    renderFilters(el.querySelector('#r-kind').value);
-    el.querySelector('#r-kind').onchange = () => renderFilters(el.querySelector('#r-kind').value);
+    el.querySelector('#btn-cols').onclick = () => {
+      const cols = REPORTS[kind].columns;
+      const keys = visibleOf(kind);
+      const back = openModal('الأعمدة الظاهرة في التقرير', `
+        <p class="muted" style="margin:0 0 10px">اختر الأعمدة التي تظهر في جدول التقرير وطباعته وتصديره — تُحفظ اختياراتك لكل تقرير.</p>
+        ${cols.map(c => `<label class="col-line"><input type="checkbox" data-key="${esc(c.key)}" ${keys.includes(c.key) ? 'checked' : ''}>
+          ${esc(c.label)}${c.weight ? ' <span class="tag muharraz">وزن</span>' : ''}</label>`).join('')}
+      `, [
+        {
+          label: 'حفظ', class: 'primary',
+          onClick: async (b) => {
+            const picked = [...b.querySelectorAll('input[data-key]:checked')].map(i => i.dataset.key);
+            if (!picked.length) { toast('اختر عموداً واحداً على الأقل', 'err'); return; }
+            saveCols(kind, picked);
+            b.remove();
+            await run();
+            toast('تم حفظ اختيار الأعمدة', 'ok');
+          },
+        },
+        {
+          label: 'الافتراضي',
+          onClick: async (b) => {
+            localStorage.removeItem(COL_KEY(kind));
+            b.remove();
+            await run();
+            toast('عاد التقرير للأعمدة الافتراضية (بدون الوزن)', 'ok');
+          },
+        },
+        { label: 'إلغاء', onClick: (b) => b.remove() },
+      ]);
+    };
+
+    renderTabs();
+    renderFilters();
     el.querySelector('#btn-run').onclick = run;
 
     btnPrint.onclick = async () => {
       if (!last) return;
-      const r = REPORTS[last.kind];
       try {
         const settings = await api.invoke('settings:get');
         await api.invoke('print:open', {
           kind: 'report',
-          title: r.label,
+          title: REPORTS[last.kind].label,
           metaLines: ['تاريخ الطباعة: ' + new Date().toLocaleString('ar')],
-          headers: r.columns.map(c => c.label),
+          headers: last.cols.map(c => c.label),
           rows: last.cells.map(row => row.map(v => esc(v))),
-          foot: r.foot ? r.foot(last.data) : '',
+          foot: REPORTS[last.kind].foot ? REPORTS[last.kind].foot(last.data, last.cols) : '',
           settings,
         });
       } catch (e) { toast(String(e.message || e), 'err'); }
@@ -247,11 +312,10 @@ register('reports', {
 
     btnExport.onclick = async () => {
       if (!last) return;
-      const r = REPORTS[last.kind];
       try {
         const res = await api.invoke('reports:export', {
-          defaultName: `${r.label}.csv`,
-          columns: r.columns.map(c => c.label),
+          defaultName: `${REPORTS[last.kind].label}.csv`,
+          columns: last.cols.map(c => c.label),
           rows: last.cells,
         });
         if (res.ok) toast('تم التصدير: ' + res.path, 'ok');
