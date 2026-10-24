@@ -118,3 +118,28 @@ test('applyBucketsDelta تجمّع دلتا كل سلة لصنف مكرر بنو
   const it2 = db.prepare('SELECT * FROM items WHERE id=1').get();
   assert.equal(it2.qty_salem + it2.qty_talef + it2.qty_muharraz, 0);
 });
+
+test('فاتورة شراء بسلات مختلفة تزيد كل عداد سلة على حدة وتنعكس عند الإلغاء', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc('warehouses', 'items', 'purchases', 'reports');
+  h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
+  const { id } = h['items:save'](null, { code: '601', name: 'عبوة', unit_name: 'حبة', qty_salem: 0, qty_talef: 0, qty_muharraz: 0 }, 1);
+  const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
+  const { id: pid } = h['purchases:save'](null, {
+    doc_number: 'ش-1', doc_date: '2026-10-25',
+    items: [
+      { item_id: id, warehouse_id: wh, quantity: 100, unit: 'حبة', unit_price: 10, bucket: 'salem' },
+      { item_id: id, warehouse_id: wh, quantity: 30, unit: 'حبة', unit_price: 0, bucket: 'talef' },
+      { item_id: id, warehouse_id: wh, quantity: 5, unit: 'حبة', unit_price: 0, bucket: 'muharraz' },
+    ],
+  }, 1);
+  const inv = () => h['reports:inventory'](null, {}).find(r => r.id === id);
+  assert.equal(inv().qty_salem, 100);
+  assert.equal(inv().qty_talef, 30);
+  assert.equal(inv().qty_muharraz, 5);
+  const line = db.prepare('SELECT bucket FROM purchase_items WHERE purchase_id=? AND item_id=?').get(pid, id);
+  assert.equal(line.bucket, 'salem');
+  // إلغاء الفاتورة يعيد العدادات كلها للصفر
+  h['purchases:void'](null, pid, 1);
+  assert.equal(inv().qty_salem + inv().qty_talef + inv().qty_muharraz, 0);
+});

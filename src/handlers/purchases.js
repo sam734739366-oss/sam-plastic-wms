@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, applySalemDelta } = require('../stock');
+const { writeMoves, voidDoc, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 const ledger = require('../ledger');
 
@@ -69,21 +69,22 @@ module.exports = function register(ipcMain) {
       }
       const moves = [];
       const insItem = db.prepare(`INSERT INTO purchase_items
-        (purchase_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, unit_price, total_price, notes)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`);
+        (purchase_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, unit_price, total_price, notes, bucket)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
+        const bucket = ['salem', 'talef', 'muharraz'].includes(it.bucket) ? it.bucket : 'salem';
         const pieces = toPieces(it.quantity, it.unit, item);
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg,
-          it.unit_price || null, (it.unit_price || 0) * it.quantity, it.notes || null);
-        moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket: 'salem', notes: it.notes });
+          it.unit_price || null, (it.unit_price || 0) * it.quantity, it.notes || null, bucket);
+        moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket, notes: it.notes });
       }
       writeMoves(db, 'purchase', id, number, doc.doc_date, moves, userId);
-      // أرصدة سليم/تالف/محرز: الشراء يزيد السليم (وعكس القديم عند التعديل)
-      if (oldItems.length) applySalemDelta(db, oldItems, -1);
-      applySalemDelta(db, moves, 1);
+      // أرصدة سليم/تالف/محرز: الشراء يزيد سلة كل بند (وعكس القديم عند التعديل)
+      if (oldItems.length) applyBucketsDelta(db, oldItems, -1);
+      applyBucketsDelta(db, moves, 1);
       const insCarton = db.prepare(`INSERT INTO cartons (carton_number, item_id, purchase_id, pieces) VALUES (?,?,?,?)`);
       for (const it of doc.items) {
         if (it.unit !== 'كرتون') continue;
@@ -114,7 +115,7 @@ module.exports = function register(ipcMain) {
     withTransaction(db, () => {
       db.prepare('DELETE FROM cartons WHERE purchase_id=?').run(id);
       voidDoc(db, 'purchase', id, userId);
-      applySalemDelta(db, oldItems, -1);
+      applyBucketsDelta(db, oldItems, -1);
       ledger.voidDoc(db, 'purchase', id);
       db.prepare(`UPDATE purchases SET status='void' WHERE id=?`).run(id);
     });
