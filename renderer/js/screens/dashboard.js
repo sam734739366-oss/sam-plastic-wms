@@ -59,6 +59,23 @@ register('dashboard', {
           دليل المستخدم
         </button>
       </div>
+      <div class="factory-strip" aria-hidden="true">
+        <svg viewBox="0 0 1440 66" preserveAspectRatio="xMidYMid slice" fill="none">
+          <line class="fx-belt" x1="0" y1="46" x2="1440" y2="46" stroke-width="3"/>
+          <line x1="0" y1="52" x2="1440" y2="52" stroke="rgba(122,158,255,.16)" stroke-width="10"/>
+          <g class="fx-bottle"><path d="M0 0 l2 9 v26 a7 7 0 0 1 -7 7 h-1 a7 7 0 0 1 -7 -7 v-26 z" transform="translate(30,12) scale(.9)" fill="#d9a441" stroke="#f0d9a8" stroke-width="1.5"/></g>
+          <g class="fx-bottle b2"><path d="M0 0 l2 9 v26 a7 7 0 0 1 -7 7 h-1 a7 7 0 0 1 -7 -7 v-26 z" transform="translate(30,12)" fill="#3b82f6" stroke="#9db9f5" stroke-width="1.5"/></g>
+          <g class="fx-bottle b3"><path d="M0 0 l2 9 v26 a7 7 0 0 1 -7 7 h-1 a7 7 0 0 1 -7 -7 v-26 z" transform="translate(30,14) scale(1.1)" fill="#2b55d4" stroke="#9db9f5" stroke-width="1.5"/></g>
+          <g class="fx-gear" style="transform-origin:640px 33px">
+            <circle cx="640" cy="33" r="11" stroke="#d9a441" stroke-width="4.5" stroke-dasharray="5 4"/>
+            <circle cx="640" cy="33" r="4" fill="#d9a441"/>
+          </g>
+          <g class="fx-gear slow" style="transform-origin:820px 33px">
+            <circle cx="820" cy="33" r="8" stroke="#d9a441" stroke-width="4.5" stroke-dasharray="4 3"/>
+            <circle cx="820" cy="33" r="3" fill="#d9a441"/>
+          </g>
+        </svg>
+      </div>
       <div class="stats">
         ${card('s-items', ICONS.box, 'عدد الأصناف', 't1')}
         ${card('s-salem', ICONS.check, 'رصيد سليم (حبة)', 't2')}

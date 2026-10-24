@@ -7,7 +7,7 @@ const card = document.querySelector('.login-card');
 (function particles() {
   const host = document.getElementById('particles');
   if (!host) return;
-  const colors = ['rgba(151,184,255,.6)', 'rgba(122,158,255,.4)', 'rgba(217,164,65,.5)'];
+  const colors = ['rgba(127,166,245,.6)', 'rgba(217,164,65,.5)', 'rgba(255,214,130,.4)'];
   for (let i = 0; i < 26; i++) {
     const p = document.createElement('span');
     p.className = 'particle';

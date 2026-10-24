@@ -15,6 +15,57 @@
     <div id="particles"></div>
   </div>
 
+  <div class="factory-scene" aria-hidden="true">
+    <svg viewBox="0 0 1440 235" preserveAspectRatio="xMidYMax slice" fill="none">
+      <!-- فرن التسخين -->
+      <g>
+        <rect x="80" y="40" width="170" height="120" rx="14" fill="#0d1a40" stroke="rgba(122,158,255,.25)"/>
+        <circle class="fx-oven" cx="165" cy="100" r="42" fill="url(#ovenGrad)"/>
+        <defs>
+          <radialGradient id="ovenGrad"><stop offset="0%" stop-color="#ffd98a"/><stop offset="55%" stop-color="#d9a441"/><stop offset="100%" stop-color="rgba(217,164,65,0)"/></radialGradient>
+        </defs>
+      </g>
+      <!-- المكينة 1: قالبان يفتحان ويغلقان -->
+      <g>
+        <rect x="330" y="55" width="150" height="105" rx="12" fill="#0d1a40" stroke="rgba(122,158,255,.25)"/>
+        <g class="fx-mold" style="transform-origin:405px 108px">
+          <path d="M382 60 h30 v48 a16 16 0 0 1 -16 16 h-14 z" fill="#2b55d4" stroke="#7fa6f5" stroke-width="2"/>
+        </g>
+        <g class="fx-mold" style="transform-origin:428px 108px; animation-direction:reverse">
+          <path d="M428 60 h30 v48 a16 16 0 0 0 -16 16 h-14 z" fill="#1e40af" stroke="#7fa6f5" stroke-width="2"/>
+        </g>
+        <rect x="390" y="132" width="50" height="6" rx="3" fill="#d9a441"/>
+      </g>
+      <!-- المكينة 2 -->
+      <g>
+        <rect x="1150" y="55" width="150" height="105" rx="12" fill="#0d1a40" stroke="rgba(122,158,255,.25)"/>
+        <g class="fx-mold" style="transform-origin:1225px 108px">
+          <path d="M1202 60 h30 v48 a16 16 0 0 1 -16 16 h-14 z" fill="#2b55d4" stroke="#7fa6f5" stroke-width="2"/>
+        </g>
+        <g class="fx-mold" style="transform-origin:1248px 108px; animation-direction:reverse">
+          <path d="M1248 60 h30 v48 a16 16 0 0 0 -16 16 h-14 z" fill="#1e40af" stroke="#7fa6f5" stroke-width="2"/>
+        </g>
+        <rect x="1210" y="132" width="50" height="6" rx="3" fill="#d9a441"/>
+      </g>
+      <!-- السير الناقل والعبوات -->
+      <line class="fx-belt" x1="0" y1="196" x2="1440" y2="196" stroke-width="4"/>
+      <line x1="0" y1="204" x2="1440" y2="204" stroke="rgba(122,158,255,.18)" stroke-width="14"/>
+      <g class="fx-bottle"><path d="M0 0 l2 10 v38 a9 9 0 0 1 -9 9 h-1 a9 9 0 0 1 -9 -9 v-38 z" transform="translate(60,142) scale(1.1)" fill="#3b82f6" stroke="#9db9f5" stroke-width="1.5"/></g>
+      <g class="fx-bottle b2"><path d="M0 0 l2 10 v30 a8 8 0 0 1 -8 8 h-1 a8 8 0 0 1 -8 -8 v-30 z" transform="translate(40,150) scale(1.3)" fill="#d9a441" stroke="#f0d9a8" stroke-width="1.5"/></g>
+      <g class="fx-bottle b3"><path d="M0 0 l2 10 v38 a9 9 0 0 1 -9 9 h-1 a9 9 0 0 1 -9 -9 v-38 z" transform="translate(60,142) scale(.95)" fill="#2b55d4" stroke="#9db9f5" stroke-width="1.5"/></g>
+      <g class="fx-bottle b4"><path d="M0 0 l2 10 v30 a8 8 0 0 1 -8 8 h-1 a8 8 0 0 1 -8 -8 v-30 z" transform="translate(40,150) scale(1.15)" fill="#3b82f6" stroke="#9db9f5" stroke-width="1.5"/></g>
+      <!-- تروس -->
+      <g class="fx-gear" style="transform-origin:520px 175px">
+        <circle cx="520" cy="175" r="16" stroke="#d9a441" stroke-width="5" stroke-dasharray="6 5"/>
+        <circle cx="520" cy="175" r="6" fill="#d9a441"/>
+      </g>
+      <g class="fx-gear slow" style="transform-origin:900px 175px">
+        <circle cx="900" cy="175" r="12" stroke="#d9a441" stroke-width="5" stroke-dasharray="5 4"/>
+        <circle cx="900" cy="175" r="4.5" fill="#d9a441"/>
+      </g>
+    </svg>
+  </div>
+
   <main class="login-card">
     <div class="login-logo">
       <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2h4l1 3v4l4.5 10.5A1.8 1.8 0 0 1 17.8 22H6.2a1.8 1.8 0 0 1-1.7-2.5L9 9V5l1-3z"/><path d="M10 2h4"/><path d="M9 13h6"/></svg>
