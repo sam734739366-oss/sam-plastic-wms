@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   weight_kg REAL NOT NULL,
   unit_price REAL,
   total_price REAL,
-  notes TEXT
+  notes TEXT,
+  bucket TEXT NOT NULL DEFAULT 'salem'
 );
 
 CREATE TABLE IF NOT EXISTS cartons (
@@ -129,7 +130,8 @@ CREATE TABLE IF NOT EXISTS issue_items (
   pieces INTEGER NOT NULL,
   weight_kg REAL NOT NULL,
   carton_ids TEXT,
-  notes TEXT
+  notes TEXT,
+  bucket TEXT NOT NULL DEFAULT 'salem'
 );
 
 CREATE TABLE IF NOT EXISTS production_results (
@@ -172,7 +174,8 @@ CREATE TABLE IF NOT EXISTS receive_items (
   unit TEXT NOT NULL,
   pieces INTEGER NOT NULL,
   weight_kg REAL NOT NULL,
-  notes TEXT
+  notes TEXT,
+  bucket TEXT NOT NULL DEFAULT 'salem'
 );
 
 CREATE TABLE IF NOT EXISTS invoices (
@@ -201,7 +204,8 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   weight_kg REAL NOT NULL,
   unit_price REAL,
   total_price REAL,
-  notes TEXT
+  notes TEXT,
+  bucket TEXT NOT NULL DEFAULT 'salem'
 );
 
 CREATE TABLE IF NOT EXISTS exit_permits (
@@ -227,7 +231,8 @@ CREATE TABLE IF NOT EXISTS exit_items (
   unit TEXT NOT NULL,
   pieces INTEGER NOT NULL,
   weight_kg REAL NOT NULL,
-  notes TEXT
+  notes TEXT,
+  bucket TEXT NOT NULL DEFAULT 'salem'
 );
 
 CREATE TABLE IF NOT EXISTS customer_raw_receipts (
@@ -321,7 +326,8 @@ CREATE TABLE IF NOT EXISTS sales_return_items (
   weight_kg REAL NOT NULL,
   unit_price REAL,
   total_price REAL,
-  notes TEXT
+  notes TEXT,
+  bucket TEXT NOT NULL DEFAULT 'salem'
 );
 
 -- مرتجعات الشراء: إرجاع المصنع بضاعة للمورد (تخرج من المخزون وتخفض ذمة المورد)
@@ -349,7 +355,8 @@ CREATE TABLE IF NOT EXISTS purchase_return_items (
   weight_kg REAL NOT NULL,
   unit_price REAL,
   total_price REAL,
-  notes TEXT
+  notes TEXT,
+  bucket TEXT NOT NULL DEFAULT 'salem'
 );
 
 CREATE TABLE IF NOT EXISTS transfers (
@@ -372,7 +379,8 @@ CREATE TABLE IF NOT EXISTS transfer_items (
   unit TEXT NOT NULL,
   pieces INTEGER NOT NULL,
   weight_kg REAL NOT NULL,
-  notes TEXT
+  notes TEXT,
+  bucket TEXT NOT NULL DEFAULT 'salem'
 );
 
 CREATE TABLE IF NOT EXISTS stock_moves (

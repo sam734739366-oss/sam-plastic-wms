@@ -72,3 +72,29 @@ test('النقل بين مخزنين ينقل تخصيص السليم مع ال�
   const all = h['reports:inventory'](null, {}).find(r => r.id === id);
   assert.equal(all.qty_salem, 1000);
 });
+
+test('ترحيل أعمدة السلة: بنود الخردة تالف ومرتجع البيع يرث سلة فاتورته', () => {
+  const db = makeDb();
+  for (const t of ['purchase_items', 'issue_items', 'receive_items', 'exit_items',
+    'transfer_items', 'invoice_items', 'sales_return_items', 'purchase_return_items']) {
+    db.exec(`ALTER TABLE ${t} DROP COLUMN bucket`);
+  }
+  db.prepare("INSERT INTO items (code, name, unit_name) VALUES ('901', 'علبة', 'حبة')").run();
+  db.prepare("INSERT INTO warehouses (name) VALUES ('المخزن الرئيسي')").run();
+  const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
+  db.prepare("INSERT INTO invoices (doc_number, doc_date, invoice_type) VALUES ('INV-1', '2026-10-25', 'sale')").run();
+  db.prepare("INSERT INTO invoices (doc_number, doc_date, invoice_type) VALUES ('INV-2', '2026-10-25', 'scrap')").run();
+  db.prepare(`INSERT INTO invoice_items (invoice_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg)
+    VALUES (1, 1, ${wh}, 100, 'حبة', 100, 0.5)`).run();
+  db.prepare(`INSERT INTO invoice_items (invoice_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg)
+    VALUES (2, 1, ${wh}, 10, 'حبة', 10, 0.05)`).run();
+  db.prepare("INSERT INTO sales_returns (doc_number, doc_date, invoice_id) VALUES ('R-1', '2026-10-25', 1)").run();
+  db.prepare(`INSERT INTO sales_return_items (return_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg)
+    VALUES (1, 1, ${wh}, 5, 'حبة', 5, 0.025)`).run();
+  const { migrate } = require('../src/db');
+  migrate(db);
+  assert.equal(db.prepare('SELECT bucket FROM invoice_items WHERE invoice_id=1').get().bucket, 'salem');
+  assert.equal(db.prepare('SELECT bucket FROM invoice_items WHERE invoice_id=2').get().bucket, 'talef');
+  assert.equal(db.prepare('SELECT bucket FROM sales_return_items WHERE return_id=1').get().bucket, 'salem');
+  assert.equal(db.prepare('SELECT bucket FROM purchase_items').all().length, 0);
+});

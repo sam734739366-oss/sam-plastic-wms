@@ -90,6 +90,28 @@ function migrate(d) {
       }
     }
   }
+  // سلة كل بند (سليم/تالف/محرز): عمود يخزن اختيار المستخدم لكل سطر في مستندات المخازن
+  const bucketTables = ['purchase_items', 'issue_items', 'receive_items', 'exit_items',
+    'transfer_items', 'invoice_items', 'sales_return_items', 'purchase_return_items'];
+  let hadAnyBucket = false;
+  for (const t of bucketTables) {
+    const cols = d.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
+    if (!cols.includes('bucket')) {
+      d.exec(`ALTER TABLE ${t} ADD COLUMN bucket TEXT NOT NULL DEFAULT 'salem'`);
+    } else {
+      hadAnyBucket = true;
+    }
+  }
+  if (!hadAnyBucket) {
+    // ترحيل البيانات القديمة: بنود فواتير الخردة → تالف، ومرتجع البيع يرث سلة بند فاتورته الأصلية
+    d.exec(`UPDATE invoice_items SET bucket='talef'
+      WHERE invoice_id IN (SELECT id FROM invoices WHERE invoice_type='scrap')`);
+    d.exec(`UPDATE sales_return_items SET bucket = COALESCE(
+      (SELECT ii.bucket FROM invoice_items ii
+       JOIN sales_returns sr ON sr.invoice_id = ii.invoice_id
+       WHERE sr.id = sales_return_items.return_id AND ii.item_id = sales_return_items.item_id
+       ORDER BY ii.id LIMIT 1), 'salem')`);
+  }
   // أدوار المستخدمين (مدير/إدخال عام/عرض فقط/مخازن): إعادة بناء جدول المستخدمين لتوسيع قيد الأدوار
   // وإسقاط دورَي «حسابات» و«مبيعات» الملغيين — من كان دورهما يتحول إلى إدخال عام.
   const userTbl = d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").get();
