@@ -126,7 +126,8 @@ module.exports = function register(ipcMain) {
     if (filters.partyId) { where.push('inv.party_id = ?'); params.push(filters.partyId); }
     const rows = db.prepare(`SELECT inv.id, inv.doc_number, inv.doc_date, inv.invoice_type,
         pa.name party_name, inv.driver_name, inv.car_number, inv.notes,
-        (SELECT COALESCE(SUM(total_price),0) FROM invoice_items ii WHERE ii.invoice_id = inv.id) total
+        (SELECT COALESCE(SUM(total_price),0) FROM invoice_items ii WHERE ii.invoice_id = inv.id) total,
+        (SELECT COALESCE(SUM(pieces),0) FROM invoice_items ii WHERE ii.invoice_id = inv.id) total_pieces
       FROM invoices inv LEFT JOIN parties pa ON pa.id = inv.party_id
       WHERE ${where.join(' AND ')}
       ORDER BY inv.doc_date DESC, inv.id DESC`).all(...params);

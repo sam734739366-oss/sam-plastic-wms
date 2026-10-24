@@ -22,7 +22,8 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     return db.prepare(`SELECT p.*, pa.name party_name,
       (SELECT COALESCE(SUM(total_price),0) FROM invoice_items WHERE invoice_id=p.id) total,
-      (SELECT COUNT(*) FROM invoice_items WHERE invoice_id=p.id) items_count
+      (SELECT COUNT(*) FROM invoice_items WHERE invoice_id=p.id) items_count,
+      (SELECT COALESCE(SUM(pieces),0) FROM invoice_items WHERE invoice_id=p.id) total_pieces
       FROM invoices p LEFT JOIN parties pa ON pa.id=p.party_id
       ORDER BY p.id DESC`).all();
   });
