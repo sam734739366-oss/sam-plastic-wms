@@ -65,19 +65,23 @@ test('sales:save sale moves stock out with balance check, totals, and deducts sa
   assert.throws(() => h['sales:save'](null, {
     doc_number: '2', doc_date: '2026-10-18', invoice_type: 'sale',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 9999, unit: 'حبة' }]
-  }, 1), /الرصيد غير كافٍ/);
+  }, 1), /رصيد السليم غير كافٍ/);
 });
 
-test('sales:save scrap invoice deducts talef and any item is accepted', () => {
+test('sales:save scrap invoice deducts talef and requires talef balance', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales']);
   stockIn(db, h, 1, 1, 500);
-  db.prepare('UPDATE items SET qty_talef=400 WHERE id=1').run();
+  // رصيد تالف فعلي في المخزن عبر شراء بسلة تالف
+  h['purchases:save'](null, {
+    doc_number: 'P-T', doc_date: '2026-10-18',
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 400, unit: 'حبة', bucket: 'talef' }]
+  }, 1);
   h['sales:save'](null, {
     doc_number: '1', doc_date: '2026-10-18', invoice_type: 'scrap', party_id: 2,
     items: [{ item_id: 1, warehouse_id: 1, quantity: 100, unit: 'حبة', unit_price: 10 }]
   }, 1);
-  assert.equal(getBalance(db, 1, 1).balance_pieces, 400);
+  assert.equal(getBalance(db, 1, 1).balance_pieces, 800);
   assert.equal(buckets(db).t, 300);
   assert.equal(buckets(db).s, 500);
 });

@@ -210,3 +210,26 @@ test('نقل بند تالف بين مخزنين ينقل السلة مع الك
     items: [{ item_id: id, quantity: 500, unit: 'حبة', bucket: 'talef' }],
   }, 1), /غير كاف/);
 });
+
+test('فاتورة خردة تخصم التالف افتراضياً وبيع بسلة مختلفة يخصم سلة البند', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc('warehouses', 'items', 'sales', 'reports');
+  h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
+  const { id } = h['items:save'](null, { code: '606', name: 'عبوة', unit_name: 'حبة', qty_salem: 100, qty_talef: 100, qty_muharraz: 0 }, 1);
+  const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
+  h['sales:save'](null, {
+    doc_number: 'ف-1', doc_date: '2026-10-25', invoice_type: 'scrap',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 20, unit: 'حبة', unit_price: 1 }],
+  }, 1);
+  let it = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(it.qty_salem, 100);
+  assert.equal(it.qty_talef, 80);
+  // بيع يخصم سلة البند (تالف هنا) بدل السليم
+  h['sales:save'](null, {
+    doc_number: 'ف-2', doc_date: '2026-10-25', invoice_type: 'sale',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 10, unit: 'حبة', unit_price: 0.5, bucket: 'talef' }],
+  }, 1);
+  it = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(it.qty_salem, 100);
+  assert.equal(it.qty_talef, 70);
+});

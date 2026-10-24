@@ -111,7 +111,7 @@ test('رصيد غير كافٍ مرفوض', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales']);
   seedStock(h, 100);
-  assert.throws(() => h['sales:save'](null, saleDoc('INV-4', [{ item_id: 1, warehouse_id: 1, quantity: 9999, unit: 'حبة' }]), 1), /الرصيد غير كاف/);
+  assert.throws(() => h['sales:save'](null, saleDoc('INV-4', [{ item_id: 1, warehouse_id: 1, quantity: 9999, unit: 'حبة' }]), 1), /رصيد السليم غير كاف/);
   assert.equal(getBalance(db, 1, 1).balance_pieces, 100);
 });
 
