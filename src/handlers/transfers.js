@@ -53,19 +53,22 @@ module.exports = function register(ipcMain) {
       }
       const moves = [];
       const insItem = db.prepare(`INSERT INTO transfer_items
-        (transfer_id, item_id, quantity, unit, pieces, weight_kg, notes)
-        VALUES (?,?,?,?,?,?,?)`);
+        (transfer_id, item_id, quantity, unit, pieces, weight_kg, notes, bucket)
+        VALUES (?,?,?,?,?,?,?,?)`);
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
         const pieces = toPieces(it.quantity, it.unit, item);
         if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
+        const bucket = ['salem', 'talef', 'muharraz'].includes(it.bucket) ? it.bucket : 'salem';
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         const bal = getBalance(db, it.item_id, doc.from_warehouse_id);
-        if (bal.balance_pieces < pieces) throw new Error(`الرصيد غير كافٍ للصنف ${item.code} في مخزن المصدر (المتوفر ${bal.balance_pieces} حبة)`);
-        moves.push({ item_id: item.id, warehouse_id: doc.from_warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket: 'salem', notes: it.notes });
-        moves.push({ item_id: item.id, warehouse_id: doc.to_warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket: 'salem', notes: it.notes });
-        insItem.run(id, item.id, it.quantity, it.unit, pieces, kg, it.notes || null);
+        const available = bal[`qty_${bucket}`] || 0;
+        const bucketLabel = { salem: 'السليم', talef: 'التالف', muharraz: 'المحرز' }[bucket];
+        if (available < pieces) throw new Error(`رصيد ${bucketLabel} غير كافٍ للصنف ${item.code} في مخزن المصدر (المتوفر ${available} حبة)`);
+        moves.push({ item_id: item.id, warehouse_id: doc.from_warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket, notes: it.notes });
+        moves.push({ item_id: item.id, warehouse_id: doc.to_warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket, notes: it.notes });
+        insItem.run(id, item.id, it.quantity, it.unit, pieces, kg, it.notes || null, bucket);
       }
       writeMoves(db, 'transfer', id, number, doc.doc_date, moves, userId);
     });

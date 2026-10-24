@@ -185,3 +185,28 @@ test('خروج بند محرز يتجاوز الرصيد المحرز يُرفض
   assert.equal(it.qty_salem, 50);
   assert.equal(it.qty_muharraz, 10);
 });
+
+test('نقل بند تالف بين مخزنين ينقل السلة مع الكمية دون تغيير العدادات', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc('warehouses', 'items', 'reports', 'transfers');
+  h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
+  h['warehouses:save'](null, { name: 'مخزن الصابون' }, 1);
+  const { id } = h['items:save'](null, { code: '605', name: 'عبوة', unit_name: 'حبة', qty_salem: 0, qty_talef: 500, qty_muharraz: 0 }, 1);
+  const mainWh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
+  const soapWh = db.prepare("SELECT id FROM warehouses WHERE name='مخزن الصابون'").get().id;
+  h['transfers:save'](null, {
+    doc_number: 'نقل-2', doc_date: '2026-10-21',
+    from_warehouse_id: mainWh, to_warehouse_id: soapWh,
+    items: [{ item_id: id, quantity: 200, unit: 'حبة', bucket: 'talef' }],
+  }, 1);
+  const main = h['reports:inventory'](null, { warehouseId: mainWh }).find(r => r.id === id);
+  const soap = h['reports:inventory'](null, { warehouseId: soapWh }).find(r => r.id === id);
+  assert.equal(main.qty_talef, 300);
+  assert.equal(soap.qty_talef, 200);
+  // نقل تالف أكثر من المتاح يُرفض
+  assert.throws(() => h['transfers:save'](null, {
+    doc_number: 'نقل-3', doc_date: '2026-10-21',
+    from_warehouse_id: soapWh, to_warehouse_id: mainWh,
+    items: [{ item_id: id, quantity: 500, unit: 'حبة', bucket: 'talef' }],
+  }, 1), /غير كاف/);
+});
