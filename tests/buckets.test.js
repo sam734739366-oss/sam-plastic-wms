@@ -233,3 +233,35 @@ test('فاتورة خردة تخصم التالف افتراضياً وبيع ب
   assert.equal(it.qty_salem, 100);
   assert.equal(it.qty_talef, 70);
 });
+
+test('مرتجع بيع لبند خردة يزيد التالف ومرتجع شراء يخصم السلة المختارة', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc('warehouses', 'items', 'sales', 'purchases', 'returns', 'reports');
+  h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
+  const { id } = h['items:save'](null, { code: '607', name: 'عبوة', unit_name: 'حبة', qty_salem: 0, qty_talef: 50, qty_muharraz: 0 }, 1);
+  const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
+  const { id: invId } = h['sales:save'](null, {
+    doc_number: 'ف-9', doc_date: '2026-10-25', invoice_type: 'scrap',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 50, unit: 'حبة', unit_price: 1 }],
+  }, 1);
+  // مرتجع بيع على فاتورة خردة بلا تحديد سلة يرث التالف من سطر الفاتورة
+  const { id: rid } = h['returns:save'](null, {
+    type: 'sale', doc_number: 'مر-1', doc_date: '2026-10-25', invoice_id: invId,
+    items: [{ item_id: id, warehouse_id: wh, quantity: 10, unit: 'حبة' }],
+  }, 1);
+  let it = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(it.qty_talef, 10);
+  assert.equal(db.prepare('SELECT bucket FROM sales_return_items WHERE return_id=?').get(rid).bucket, 'talef');
+  // مرتجع شراء بلا سلة محدد يفترض السليم ويخصمه بعد فحص كفايته
+  const { id: pid } = h['purchases:save'](null, {
+    doc_number: 'ش-9', doc_date: '2026-10-25',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 30, unit: 'حبة', bucket: 'salem' }],
+  }, 1);
+  h['returns:save'](null, {
+    type: 'purchase', doc_number: 'مر-2', doc_date: '2026-10-25', purchase_id: pid,
+    items: [{ item_id: id, warehouse_id: wh, quantity: 5, unit: 'حبة' }],
+  }, 1);
+  it = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(it.qty_salem, 25);
+  assert.equal(it.qty_talef, 10);
+});

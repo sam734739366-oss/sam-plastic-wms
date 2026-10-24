@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance, applyBucketDelta, applySalemDelta } = require('../stock');
+const { writeMoves, voidDoc, getBalance, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 const ledger = require('../ledger');
 
@@ -12,6 +12,13 @@ const TYPE_BUCKET = { sale: 'salem', scrap: 'talef' };
 function saleBucketOf(db, invoiceId) {
   const inv = db.prepare('SELECT invoice_type FROM invoices WHERE id=?').get(invoiceId);
   return inv ? TYPE_BUCKET[inv.invoice_type] : null;
+}
+
+// سلة بند فاتورة البيع المطابق للصنف — يرثها مرتجع البيع افتراضياً
+function saleLineBucketOf(db, invoiceId, itemId) {
+  const line = db.prepare(`SELECT bucket FROM invoice_items WHERE invoice_id=? AND item_id=? ORDER BY id LIMIT 1`)
+    .get(invoiceId, itemId);
+  return line && line.bucket ? line.bucket : (saleBucketOf(db, invoiceId) || 'salem');
 }
 
 function maxReturnable(db, table, refCol, refId, itemId, excludeId = null) {
@@ -123,11 +130,10 @@ module.exports = function register(ipcMain) {
       if (id) {
         oldItems = db.prepare(`SELECT * FROM ${itemsTable} WHERE return_id=?`).all(id);
         db.prepare(`DELETE FROM ${itemsTable} WHERE return_id=?`).run(id);
-        // عكس الأثر القديم كاملاً قبل تطبيق الجديد
+        // عكس الأثر القديم كاملاً قبل تطبيق الجديد (كل بند يحمل سلة خاصة)
         voidDoc(db, isSale ? 'sale_return' : 'purchase_return', id, userId);
-        const oldKey = isSale ? saleBucketOf(db, before.invoice_id) : 'salem';
         // مرتجع البيع كان +سلة فالعكس خصم، ومرتجع الشراء كان −سليم فالعكس إضافة
-        if (oldKey) applyBucketDelta(db, oldItems, isSale ? -1 : 1, oldKey);
+        applyBucketsDelta(db, oldItems, isSale ? -1 : 1);
         ledger.voidDoc(db, isSale ? 'sale_return' : 'purchase_return', id);
         db.prepare(`UPDATE ${table} SET doc_number=?, doc_date=?, ${refCol}=?, party_id=?, payment_method=?, notes=? WHERE id=?`)
           .run(number, doc.doc_date, isSale ? doc.invoice_id : doc.purchase_id,
@@ -140,8 +146,8 @@ module.exports = function register(ipcMain) {
       }
       const moves = [];
       const insItem = db.prepare(`INSERT INTO ${itemsTable}
-        (return_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, unit_price, total_price, notes)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`);
+        (return_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, unit_price, total_price, notes, bucket)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
@@ -154,23 +160,27 @@ module.exports = function register(ipcMain) {
         if (pieces > remaining) {
           throw new Error(`كمية الإرجاع للصنف ${item.code} تتجاوز المتبقي من الفاتورة الأصلية (المتبقي ${remaining} حبة)`);
         }
+        const bucket = ['salem', 'talef', 'muharraz'].includes(it.bucket)
+          ? it.bucket
+          : (isSale ? saleLineBucketOf(db, doc.invoice_id, item.id) : 'salem');
         if (!isSale) {
           const bal = getBalance(db, item.id, it.warehouse_id);
-          if (bal.balance_pieces < pieces) {
-            throw new Error(`الرصيد غير كافٍ لإرجاع الصنف ${item.code} للمورد (المطلوب ${pieces} والمتوفر ${bal.balance_pieces})`);
+          const available = bal[`qty_${bucket}`] || 0;
+          const bucketLabel = { salem: 'السليم', talef: 'التالف', muharraz: 'المحرز' }[bucket];
+          if (available < pieces) {
+            throw new Error(`رصيد ${bucketLabel} غير كافٍ لإرجاع الصنف ${item.code} للمورد (المطلوب ${pieces} والمتوفر ${available})`);
           }
         }
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         const price = Number(it.unit_price) || 0;
-        insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, price, price * it.quantity, it.notes || null);
+        insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, price, price * it.quantity, it.notes || null, bucket);
         moves.push(isSale
-          ? { item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket: saleBucketOf(db, source.id), notes: it.notes }
-          : { item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket: 'salem', notes: it.notes });
+          ? { item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket, notes: it.notes }
+          : { item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket, notes: it.notes });
       }
       writeMoves(db, isSale ? 'sale_return' : 'purchase_return', id, number, doc.doc_date, moves, userId);
-      // أثر السلات: مرتجع البيع يزيد سلة الفاتورة، ومرتجع الشراء يخصم السليم
-      const key = isSale ? saleBucketOf(db, source.id) : 'salem';
-      if (key) applyBucketDelta(db, moves, isSale ? 1 : -1, key);
+      // أثر السلات: مرتجع البيع يزيد سلة كل بند، ومرتجع الشراء يخصمها
+      applyBucketsDelta(db, moves, isSale ? 1 : -1);
       const total = db.prepare(`SELECT COALESCE(SUM(total_price),0) t FROM ${itemsTable} WHERE return_id=?`).get(id).t;
       ledger.returnEffect(db, {
         docType: isSale ? 'sale_return' : 'purchase_return',
@@ -197,8 +207,7 @@ module.exports = function register(ipcMain) {
     const oldItems = db.prepare(`SELECT * FROM ${itemsTable} WHERE return_id=?`).all(doc.id);
     withTransaction(db, () => {
       voidDoc(db, isSale ? 'sale_return' : 'purchase_return', doc.id, userId);
-      const key = isSale ? saleBucketOf(db, before.invoice_id) : 'salem';
-      if (key) applyBucketDelta(db, oldItems, isSale ? -1 : 1, key);
+      applyBucketsDelta(db, oldItems, isSale ? -1 : 1);
       ledger.voidDoc(db, isSale ? 'sale_return' : 'purchase_return', doc.id);
       db.prepare(`UPDATE ${table} SET status='void' WHERE id=?`).run(doc.id);
     });
