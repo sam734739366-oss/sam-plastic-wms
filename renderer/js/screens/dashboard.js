@@ -16,7 +16,7 @@ function renderCharts(root, c) {
     ? monthlyBars({
       labels: c.monthly.map((m) => m.label),
       series: [
-        { name: 'مشتريات', color: '#3b6cf0', values: c.monthly.map((m) => m.purchases) },
+        { name: 'مشتريات', color: '#1e40af', values: c.monthly.map((m) => m.purchases) },
       ],
     })
     : emptyHtml('لا توجد مشتريات خلال آخر 6 أشهر');
@@ -25,7 +25,7 @@ function renderCharts(root, c) {
     segments: [
       { label: 'سليم', value: c.buckets[0].value, color: '#16a34a' },
       { label: 'تالف', value: c.buckets[1].value, color: '#dc2626' },
-      { label: 'محرز', value: c.buckets[2].value, color: '#6d28d9' },
+      { label: 'محرز', value: c.buckets[2].value, color: '#d9a441' },
     ],
   }) || emptyHtml('لا يوجد مخزون مسجّل بعد');
 
