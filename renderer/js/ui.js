@@ -59,7 +59,60 @@ export function explainDialog(title, lines) {
 
 export function renderTable(el, columns, rows) {
   el.innerHTML = `<div class="table-wrap"><table class="data"><thead><tr>${columns.map(c => `<th>${c.label}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(r => `<tr>${columns.map(c => `<td>${c.render ? c.render(r) : esc(r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    <tbody>${rows.map((r, i) => `<tr data-ri="${i}">${columns.map(c => `<td>${c.render ? c.render(r) : esc(r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+// ===== قائمة كليك يمين لصفوف الجداول =====
+// نقرة يمنى واحدة على صف تفتح قائمة إجراءات (عرض/طباعة/تعديل/إلغاء/حذف)،
+// ونقرتان يمنيتان سريعتان على الصف نفسه تشغلان إجراء «الفتح» (عرض المستند).
+// attachRowMenu(عنصر_الجدول, (rowIndex) => [{ label, danger, open, onClick }])
+let ctxMenuEl = null;
+function closeCtxMenu() { if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
+if (!document.__ctxWired) {
+  document.__ctxWired = true;
+  document.addEventListener('mousedown', (ev) => { if (ctxMenuEl && !ctxMenuEl.contains(ev.target)) closeCtxMenu(); });
+  document.addEventListener('scroll', () => closeCtxMenu(), true);
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeCtxMenu(); });
+}
+
+export function attachRowMenu(tableWrapEl, actionOf) {
+  if (!tableWrapEl) return;
+  // إعادة الاستدعاء بعد كل عرض للجدول تُحدّث مصفوفة الإجراءات فقط،
+  // ولا تُضيف مستمعاً جديداً (حتى لا تتراكم المستمعات مع كل بحث أو عرض تقرير).
+  if (tableWrapEl.__rowMenu) {
+    tableWrapEl.__rowMenu.actionOf = actionOf;
+    return;
+  }
+  const state = { lastId: null, lastT: 0, actionOf };
+  tableWrapEl.__rowMenu = state;
+  tableWrapEl.addEventListener('contextmenu', (ev) => {
+    const tr = ev.target.closest('tr[data-ri]');
+    if (!tr) return;
+    ev.preventDefault();
+    const ri = Number(tr.dataset.ri);
+    const actions = state.actionOf(ri);
+    if (!Array.isArray(actions) || !actions.length) return;
+    const open = actions.find(a => a.open);
+    const now = Date.now();
+    if (state.lastId === ri && now - state.lastT < 500) {
+      state.lastId = null; state.lastT = 0;
+      closeCtxMenu();
+      if (open) open.onClick();
+      return;
+    }
+    state.lastId = ri; state.lastT = now;
+    closeCtxMenu();
+    const menu = document.createElement('div');
+    menu.className = 'ctx-menu';
+    menu.innerHTML = actions.map(a => `<button class="ctx-item${a.danger ? ' danger' : ''}">${esc(a.label)}</button>`).join('');
+    menu.querySelectorAll('.ctx-item').forEach((btn, i) => {
+      btn.onclick = () => { closeCtxMenu(); actions[i].onClick(); };
+    });
+    document.body.appendChild(menu);
+    menu.style.left = `${Math.max(4, Math.min(ev.clientX, window.innerWidth - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${Math.max(4, Math.min(ev.clientY, window.innerHeight - menu.offsetHeight - 8))}px`;
+    ctxMenuEl = menu;
+  });
 }
 
 // فاتح النوافذ المنبثقة — يضبطه مدير النوافذ (wm.js) عند التشغيل،

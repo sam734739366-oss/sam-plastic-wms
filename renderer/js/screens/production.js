@@ -1,6 +1,6 @@
 import { register, go } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc } from '../ui.js';
 import { fmtNum, today } from '../fmt.js';
 
 register('production', {
@@ -39,6 +39,12 @@ register('production', {
         { key: 'actions', label: '', render: r => `<button class="btn mini primary" data-result="${r.carton_id}">تسجيل النتيجة</button>` },
       ], pending);
       el.querySelectorAll('[data-result]').forEach(b => b.onclick = () => resultForm(Number(b.dataset.result), false));
+      attachRowMenu(el.querySelector('#pending-wrap'), (ri) => {
+        const r = pending[ri];
+        return [
+          { label: 'تسجيل النتيجة', open: true, onClick: () => resultForm(r.carton_id, false) },
+        ];
+      });
       if (!pending.length) {
         el.querySelector('#pending-wrap').innerHTML = '<p class="muted">لا توجد كراتين بانتظار النتيجة — سجّل تصريح صرف للإنتاج يتضمن كراتين مرقمة لتظهر هنا.</p>';
       }
@@ -58,18 +64,20 @@ register('production', {
                 : '<span class="tag salem">مكتمل</span>';
           }
         },
-        { key: 'actions', label: '', render: r => `<button class="btn mini" data-edit="${r.carton_id}">تعديل</button>
-          <button class="btn mini" data-print="${r.carton_id}">طباعة</button>
-          <button class="btn mini danger" data-del="${r.carton_id}">حذف</button>` },
       ], done);
-      el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => resultForm(Number(b.dataset.edit), true));
-      el.querySelectorAll('[data-print]').forEach(b => b.onclick = async () => {
-        try {
-          const doc = await api.invoke('production:get', Number(b.dataset.print));
-          await api.invoke('print:open', { kind: 'production', doc, settings: await api.invoke('settings:get') });
-        } catch (e) { toast(String(e.message || e), 'err'); }
+      attachRowMenu(el.querySelector('#done-wrap'), (ri) => {
+        const r = done[ri];
+        return [
+          { label: 'تعديل', open: true, onClick: () => resultForm(r.carton_id, true) },
+          { label: 'طباعة', onClick: async () => {
+            try {
+              const doc = await api.invoke('production:get', r.carton_id);
+              await api.invoke('print:open', { kind: 'production', doc, settings: await api.invoke('settings:get') });
+            } catch (e) { toast(String(e.message || e), 'err'); }
+          } },
+          { label: 'حذف', danger: true, onClick: () => delResult(r.carton_id) },
+        ];
       });
-      el.querySelectorAll('[data-del]').forEach(b => b.onclick = () => delResult(Number(b.dataset.del)));
       if (!done.length) {
         el.querySelector('#done-wrap').innerHTML = '<p class="muted">لم تُسجل أي نتيجة بعد — سجّل نتيجة أول كرتون من قائمة الانتظار أعلاه.</p>';
       }

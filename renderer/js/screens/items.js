@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc } from '../ui.js';
 
 const UNITS = ['علبة', 'حبة', 'غطاء', 'كيس', 'كرتون', 'امبول'];
 
@@ -56,6 +56,7 @@ function collect(back) {
     qty_salem: num(v('f-salem')) || 0,
     qty_talef: num(v('f-talef')) || 0,
     qty_muharraz: num(v('f-muharraz')) || 0,
+    opening_warehouse_id: Number(v('f-opening-wh')) || null,
     is_complement: back.querySelector('#f-complement')?.checked ? 1 : 0,
     notes: v('f-notes').trim() || null,
   };
@@ -114,6 +115,7 @@ register('items', {
   title: 'الأصناف',
   async mount(el) {
     let rows = [];
+    let warehouses = [];
 
     el.innerHTML = `
       <div class="toolbar">
@@ -172,21 +174,14 @@ register('items', {
         { key: 'talef', label: 'تالف', render: r => qtyCell(r, 'qty_talef', 'talef', 'تالف') },
         { key: 'muharraz', label: 'محرز', render: r => qtyCell(r, 'qty_muharraz', 'muharraz', 'محرز') },
         { key: 'notes', label: 'ملاحظات' },
-        {
-          key: 'actions', label: '',
-          render: (r) => `<button class="btn mini" data-edit="${r.id}">تعديل</button>
-            <button class="btn mini danger" data-del="${r.id}">حذف</button>`,
-        },
       ], filtered);
 
-      el.querySelectorAll('[data-edit]').forEach(b => {
-        b.onclick = () => edit(rows.find(r => r.id === Number(b.dataset.edit)), () => refresh());
-      });
-      el.querySelectorAll('[data-del]').forEach(b => {
-        b.onclick = async () => {
-          const r = rows.find(x => x.id === Number(b.dataset.del));
-          if (!r) return;
-          if (await confirmDialog(`حذف الصنف «${esc(r.name)}»؟`)) {
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
+        const r = filtered[ri];
+        return [
+          { label: 'تعديل', open: true, onClick: () => edit(r, () => refresh()) },
+          { label: 'حذف', danger: true, onClick: async () => {
+            if (!(await confirmDialog(`حذف الصنف «${esc(r.name)}»؟`))) return;
             try {
               await api.invoke('items:delete', r.id, currentUser().id);
               toast('تم حذف الصنف', 'ok');
@@ -194,24 +189,35 @@ register('items', {
             } catch (err) {
               toast(String(err.message || err), 'err');
             }
-          }
-        };
+          } },
+        ];
       });
     }
 
     async function refresh() {
-      rows = await api.invoke('items:list');
+      [rows, warehouses] = await Promise.all([
+        api.invoke('items:list'),
+        api.invoke('warehouses:list'),
+      ]);
       renderTableData();
+    }
+
+    function whOptions(selectedId) {
+      return warehouses.map(w => `<option value="${w.id}" ${String(w.id) === String(selectedId) ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
     }
 
     function edit(row, onSaved) {
       const hasMoves = !!row?.has_moves;
+      const defaultWh = row?.opening_warehouse_id || warehouses[0]?.id || '';
       const back = openModal(row ? 'تعديل صنف' : 'إضافة صنف', `
         <div class="form-grid">
           <div class="field"><label>كود الصنف * (أرقام فقط)</label><input id="f-code" inputmode="numeric" value="${esc(row?.code || '')}" placeholder="مثال: 101"></div>
           <div class="field"><label>اسم الصنف *</label><input id="f-name" value="${esc(row?.name || '')}"></div>
           <div class="field"><label>الوحدة *</label>
             <select id="f-unit">${UNITS.map(u => `<option value="${esc(u)}" ${row?.unit_name === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>مخزن الرصيد الافتتاحي *</label>
+            <select id="f-opening-wh">${whOptions(defaultWh)}</select>
           </div>
           <div class="field"><label>وزن الوحدة (جرام)</label><input id="f-weight" inputmode="decimal" value="${esc(row?.weight_grams || '')}" placeholder="مثال: 5.02"></div>
           <div class="field"><label>عدد القطع في الكرتون (اختياري)</label><input id="f-carton" inputmode="numeric" value="${esc(row?.pieces_per_carton || '')}"></div>
@@ -226,14 +232,18 @@ register('items', {
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(row?.notes || '')}"></div>
         </div>
         ${hasMoves
-          ? '<p class="muted" style="margin:10px 0 0">لهذا الصنف حركات مخزون: تعديل الكميات يضبط الرصيد الافتتاحي تلقائياً ويظهر فوراً في كل التقارير والمخازن، ولا يُقبل رصيد أقل من صافي حركات السلة.</p>'
-          : '<p class="muted" style="margin:10px 0 0">الأرصدة الافتتاحية تُسجَّل كحركة مخزون في «المخزن الرئيسي» وتظهر فوراً في الجرد والتقارير وتصبح قابلة للصرف والبيع.</p>'}
+          ? '<p class="muted" style="margin:10px 0 0">لهذا الصنف حركات مخزون: تعديل الكميات يضبط الرصيد الافتتاحي تلقائياً في المخزن المختار ويظهر فوراً في كل التقارير والمخازن، ولا يُقبل رصيد أقل من صافي حركات السلة.</p>'
+          : '<p class="muted" style="margin:10px 0 0">الأرصدة الافتتاحية تُسجَّل كحركة مخزون في المخزن المختار وتظهر فوراً في الجرد والتقارير وتصبح قابلة للصرف والبيع.</p>'}
         <div id="conv" style="margin-top:10px;color:#2450c8;font-size:13px;line-height:1.8"></div>
       `, [
         {
           label: 'حفظ', class: 'primary',
           onClick: async (b) => {
             try {
+              if (!Number(b.querySelector('#f-opening-wh')?.value)) {
+                toast('اختر مخزن الرصيد الافتتاحي', 'err');
+                return;
+              }
               await api.invoke('items:save', collect(b), currentUser().id);
               toast('تم حفظ الصنف', 'ok');
               b.remove();
@@ -265,6 +275,8 @@ register('items', {
       const back = openModal('استيراد الأصناف من ملف', `
         <p style="line-height:1.8">اختر ملف CSV أو الصق البيانات (كل سطر صنف):<br>
         <small style="color:#64748b">كود ; اسم ; وحدة ; وزن ; كرتون ; شدة ; كيس ; سليم ; تالف ; محرز ; ملاحظات</small></p>
+        <div class="field"><label>مخزن الرصيد الافتتاحي *</label>
+          <select id="imp-wh">${whOptions(warehouses[0]?.id || '')}</select></div>
         <div class="field"><input type="file" id="imp-file" accept=".csv,.txt"></div>
         <div class="field"><label>أو الصق البيانات هنا</label><textarea id="imp-text" rows="6" style="font-family:monospace;font-size:12px"></textarea></div>
         <div id="imp-result" style="margin-top:8px;color:#2450c8;font-weight:bold"></div>
@@ -273,11 +285,13 @@ register('items', {
           label: 'استيراد', class: 'primary',
           onClick: async (b) => {
             try {
+              const wh = Number(b.querySelector('#imp-wh')?.value) || null;
+              if (!wh) { toast('اختر مخزن الرصيد الافتتاحي', 'err'); return; }
               const text = b.querySelector('#imp-text').value.trim();
               if (!text) { toast('لا توجد بيانات للاستيراد', 'err'); return; }
               const parsed = parseCsv(text);
               if (!parsed.length) { toast('لم يتم التعرف على أي صف صالح', 'err'); return; }
-              const res = await api.invoke('items:import', parsed, currentUser().id);
+              const res = await api.invoke('items:import', parsed, currentUser().id, wh);
               b.querySelector('#imp-result').textContent = `تم استيراد ${res.imported} صنف (تجاهل المكرر وغير الصالح: ${parsed.length - res.imported})`;
               toast(`تم استيراد ${res.imported} صنف`, 'ok');
               await onDone();

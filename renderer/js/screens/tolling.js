@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, openModal, esc , itemCombo} from '../ui.js';
+import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc , itemCombo} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -42,28 +42,29 @@ register('tolling', {
           { key: 'items_count', label: 'البنود' },
           { key: 'total_pieces', label: 'الحبات', render: r => fmtNum(r.total_pieces, 0) },
           { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
-          { key: 'actions', label: '', render: r => `<button class="btn mini" data-view="${r.id}">عرض</button>
-            <button class="btn mini" data-print="${r.id}">طباعة</button>
-            <button class="btn mini" data-edit="${r.id}">تعديل</button>
-            <button class="btn mini danger" data-void="${r.id}">إلغاء</button>` },
         ], receipts);
-        body.querySelectorAll('[data-view]').forEach(b => b.onclick = () => receiptView(Number(b.dataset.view)));
-        body.querySelectorAll('[data-print]').forEach(b => b.onclick = async () => {
-          try {
-            const doc = await api.invoke('tolling:receiptGet', Number(b.dataset.print));
-            await api.invoke('print:open', { kind: 'toll_receipt', doc, settings: await api.invoke('settings:get') });
-          } catch (e) { toast(String(e.message || e), 'err'); }
-        });
-        body.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
-          const doc = await api.invoke('tolling:receiptGet', Number(b.dataset.edit));
-          receiptForm(doc, customers, items);
-        });
-        body.querySelectorAll('[data-void]').forEach(b => b.onclick = async () => {
-          if (!(await confirmDialog('سيُلغى السند ويُخصم من رصيد العميل. متابعة؟'))) return;
-          try {
-            await api.invoke('tolling:receiptVoid', Number(b.dataset.void), currentUser().id);
-            toast('تم الإلغاء', 'ok'); await load('receipts');
-          } catch (e) { toast(String(e.message || e), 'err'); }
+        attachRowMenu(body.querySelector('#table-wrap'), (ri) => {
+          const r = receipts[ri];
+          return [
+            { label: 'عرض', open: true, onClick: () => receiptView(r.id) },
+            { label: 'طباعة', onClick: async () => {
+              try {
+                const doc = await api.invoke('tolling:receiptGet', r.id);
+                await api.invoke('print:open', { kind: 'toll_receipt', doc, settings: await api.invoke('settings:get') });
+              } catch (e) { toast(String(e.message || e), 'err'); }
+            } },
+            { label: 'تعديل', onClick: async () => {
+              const doc = await api.invoke('tolling:receiptGet', r.id);
+              receiptForm(doc, customers, items);
+            } },
+            { label: 'إلغاء', danger: true, onClick: async () => {
+              if (!(await confirmDialog('سيُلغى السند ويُخصم من رصيد العميل. متابعة؟'))) return;
+              try {
+                await api.invoke('tolling:receiptVoid', r.id, currentUser().id);
+                toast('تم الإلغاء', 'ok'); await load('receipts');
+              } catch (e) { toast(String(e.message || e), 'err'); }
+            } },
+          ];
         });
       } else if (tab === 'deliveries') {
         body.innerHTML = `<div class="toolbar"><button class="btn primary" id="btn-add">+ سند تسليم</button></div>
@@ -79,23 +80,25 @@ register('tolling', {
           { key: 'total_pieces', label: 'القطع المسلمة', render: r => fmtNum(r.total_pieces, 0) },
           { key: 'invoice_number', label: 'فاتورة الأجرة', render: r => r.invoice_number || '—' },
           { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
-          { key: 'actions', label: '', render: r => `<button class="btn mini" data-view="${r.id}">عرض</button>
-            <button class="btn mini" data-print="${r.id}">طباعة</button>
-            <button class="btn mini danger" data-void="${r.id}">إلغاء</button>` },
         ], deliveries);
-        body.querySelectorAll('[data-view]').forEach(b => b.onclick = () => deliveryView(Number(b.dataset.view)));
-        body.querySelectorAll('[data-print]').forEach(b => b.onclick = async () => {
-          try {
-            const doc = await api.invoke('tolling:deliveryGet', Number(b.dataset.print));
-            await api.invoke('print:open', { kind: 'toll_delivery', doc, settings: await api.invoke('settings:get') });
-          } catch (e) { toast(String(e.message || e), 'err'); }
-        });
-        body.querySelectorAll('[data-void]').forEach(b => b.onclick = async () => {
-          if (!(await confirmDialog('سيُلغى سند التسليم ويُعاد لرصيد العميل. متابعة؟'))) return;
-          try {
-            await api.invoke('tolling:deliveryVoid', Number(b.dataset.void), currentUser().id);
-            toast('تم الإلغاء', 'ok'); await load('deliveries');
-          } catch (e) { toast(String(e.message || e), 'err'); }
+        attachRowMenu(body.querySelector('#table-wrap'), (ri) => {
+          const r = deliveries[ri];
+          return [
+            { label: 'عرض', open: true, onClick: () => deliveryView(r.id) },
+            { label: 'طباعة', onClick: async () => {
+              try {
+                const doc = await api.invoke('tolling:deliveryGet', r.id);
+                await api.invoke('print:open', { kind: 'toll_delivery', doc, settings: await api.invoke('settings:get') });
+              } catch (e) { toast(String(e.message || e), 'err'); }
+            } },
+            { label: 'إلغاء', danger: true, onClick: async () => {
+              if (!(await confirmDialog('سيُلغى سند التسليم ويُعاد لرصيد العميل. متابعة؟'))) return;
+              try {
+                await api.invoke('tolling:deliveryVoid', r.id, currentUser().id);
+                toast('تم الإلغاء', 'ok'); await load('deliveries');
+              } catch (e) { toast(String(e.message || e), 'err'); }
+            } },
+          ];
         });
       } else {
         renderTable(body, [

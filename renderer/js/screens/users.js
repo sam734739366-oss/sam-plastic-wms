@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser, isManager } from '../api.js';
-import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc } from '../ui.js';
 
 const ROLE_LABEL = {
   manager: 'مدير', clerk: 'إدخال عام', viewer: 'عرض فقط',
@@ -34,21 +34,16 @@ register('users', {
         { key: 'username', label: 'اسم المستخدم', render: r => `<span dir="ltr">${esc(r.username)}</span>` },
         { key: 'full_name', label: 'الاسم الكامل' },
         { key: 'role', label: 'الدور', render: r => `<span class="tag ${ROLE_TAG[r.role] || 'muharraz'}">${ROLE_LABEL[r.role] || r.role}</span>` },
-        {
-          key: 'actions', label: '',
-          render: (r) => `<button class="btn mini" data-edit="${r.id}">تعديل</button>
-            ${r.username !== 'admin' ? `<button class="btn mini danger" data-del="${r.id}">حذف</button>` : ''}`,
-        },
       ], rows);
 
-      el.querySelectorAll('[data-edit]').forEach(b => {
-        b.onclick = () => edit(rows.find(r => r.id === Number(b.dataset.edit)), refresh);
-      });
-      el.querySelectorAll('[data-del]').forEach(b => {
-        b.onclick = async () => {
-          const r = rows.find(x => x.id === Number(b.dataset.del));
-          if (!r) return;
-          if (await confirmDialog(`حذف المستخدم «${esc(r.username)}» نهائياً؟`)) {
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
+        const r = rows[ri];
+        const items = [
+          { label: 'تعديل', open: true, onClick: () => edit(r, refresh) },
+        ];
+        if (r.username !== 'admin') {
+          items.push({ label: 'حذف', danger: true, onClick: async () => {
+            if (!(await confirmDialog(`حذف المستخدم «${esc(r.username)}» نهائياً؟`))) return;
             try {
               await api.invoke('users:delete', r.id, currentUser().id);
               toast('تم الحذف', 'ok');
@@ -56,8 +51,9 @@ register('users', {
             } catch (e) {
               toast(String(e.message || e), 'err');
             }
-          }
-        };
+          } });
+        }
+        return items;
       });
     }
 

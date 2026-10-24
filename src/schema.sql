@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS items (
   qty_salem INTEGER NOT NULL DEFAULT 0,
   qty_talef INTEGER NOT NULL DEFAULT 0,
   qty_muharraz INTEGER NOT NULL DEFAULT 0,
+  opening_warehouse_id INTEGER,
   service_price REAL,
   is_recycled INTEGER NOT NULL DEFAULT 0,
   brand TEXT,

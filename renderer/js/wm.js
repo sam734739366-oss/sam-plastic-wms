@@ -195,6 +195,11 @@ export function openWindow(name, opts = {}) {
   syncTaskbar();
   placeNew(el);
   cascade += 1;
+  // النوافذ تُفتح افتراضياً ممتلئة بمساحة البرنامج، وزر التكبير يعيد الحجم الطبيعي
+  win.prev = { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height };
+  el.classList.add('max');
+  const maxBtn0 = el.querySelector('.wc-max');
+  if (maxBtn0) maxBtn0.textContent = '❐';
 
   mountInto(win);
   wireWindow(win, { dragHandle: el.querySelector('.win-bar') });
@@ -246,6 +251,11 @@ export function openPopup({ title, bodyHtml, buttons = [] }) {
   syncTaskbar();
   placeNew(el, { small: true });
   cascade += 1;
+  // النوافذ المنبثقة تُفتح افتراضياً ممتلئة بمساحة البرنامج أيضاً
+  win.prev = { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height };
+  el.classList.add('max');
+  const maxBtn1 = el.querySelector('.wc-max');
+  if (maxBtn1) maxBtn1.textContent = '❐';
 
   wireWindow(win, { dragHandle: el.querySelector('.win-bar') });
 

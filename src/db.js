@@ -23,6 +23,14 @@ function migrate(d) {
   add('qty_salem', 'qty_salem INTEGER NOT NULL DEFAULT 0');
   add('qty_talef', 'qty_talef INTEGER NOT NULL DEFAULT 0');
   add('qty_muharraz', 'qty_muharraz INTEGER NOT NULL DEFAULT 0');
+  // مخزن الرصيد الافتتاحي: يُحدد المستخدم أي مخزن يحتضن حركات الافتتاح
+  add('opening_warehouse_id', 'opening_warehouse_id INTEGER');
+  if (!cols.includes('opening_warehouse_id')) {
+    d.exec(`UPDATE items SET opening_warehouse_id = COALESCE(
+      (SELECT m.warehouse_id FROM stock_moves m WHERE m.doc_type='opening' AND m.item_id = items.id LIMIT 1),
+      (SELECT w.id FROM warehouses w ORDER BY w.id LIMIT 1))
+      WHERE opening_warehouse_id IS NULL`);
+  }
   // الصنف المكمل (أغطية ونحوها): يُستبعد من جرد المخزون، وتُعلَّم الأغطية الحالية تلقائياً
   if (!cols.includes('is_complement')) {
     d.exec('ALTER TABLE items ADD COLUMN is_complement INTEGER NOT NULL DEFAULT 0');

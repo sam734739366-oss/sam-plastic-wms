@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, openModal, esc, itemCombo } from '../ui.js';
+import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc, itemCombo } from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -31,19 +31,17 @@ register('returns', {
         { key: 'payment_method', label: 'التسوية', render: r => r.payment_method === 'cash' ? '<span class="tag muharraz">نقد مسترد</span>' : '<span class="tag">آجل</span>' },
         { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
         { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
-        {
-          key: 'actions', label: '',
-          render: (r) => `<button class="btn mini" data-view="${r.id}">عرض</button>
-            <button class="btn mini" data-print="${r.id}">طباعة</button>
-            <button class="btn mini" data-edit="${r.id}">تعديل</button>
-            <button class="btn mini danger" data-void="${r.id}">إلغاء</button>`,
-        },
       ];
       renderTable(el.querySelector('#table-purchase'), cols, purchases);
-      el.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view(Number(b.dataset.view)));
-      el.querySelectorAll('[data-print]').forEach(b => b.onclick = () => printDoc(Number(b.dataset.print)));
-      el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => edit(Number(b.dataset.edit)));
-      el.querySelectorAll('[data-void]').forEach(b => b.onclick = () => voidDoc(Number(b.dataset.void)));
+      attachRowMenu(el.querySelector('#table-purchase'), (ri) => {
+        const r = purchases[ri];
+        return [
+          { label: 'عرض', open: true, onClick: () => view(r.id) },
+          { label: 'طباعة', onClick: () => printDoc(r.id) },
+          { label: 'تعديل', onClick: () => edit(r.id) },
+          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
+        ];
+      });
     }
 
     async function printDoc(id) {

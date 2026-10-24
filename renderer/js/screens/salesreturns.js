@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, esc, renderTable, openModal, implicationsDialog } from '../ui.js';
+import { toast, esc, renderTable, attachRowMenu, openModal, implicationsDialog } from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -31,18 +31,16 @@ register('salesreturns', {
         { key: 'party_name', label: 'العميل', render: r => r.party_name || '—' },
         { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
         { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغاة</span>' : '<span class="tag salem">نشطة</span>' },
-        {
-          key: 'actions', label: '',
-          render: (r) => `<button class="btn mini" data-view="${r.id}">عرض</button>
-            <button class="btn mini" data-print="${r.id}">طباعة</button>
-            <button class="btn mini" data-edit="${r.id}">تعديل</button>
-            <button class="btn mini danger" data-void="${r.id}">إلغاء</button>`,
-        },
       ], rows);
-      el.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view(Number(b.dataset.view)));
-      el.querySelectorAll('[data-print]').forEach(b => b.onclick = () => printDoc(Number(b.dataset.print)));
-      el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => edit(Number(b.dataset.edit)));
-      el.querySelectorAll('[data-void]').forEach(b => b.onclick = () => voidDoc(Number(b.dataset.void)));
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
+        const r = rows[ri];
+        return [
+          { label: 'عرض', open: true, onClick: () => view(r.id) },
+          { label: 'طباعة', onClick: () => printDoc(r.id) },
+          { label: 'تعديل', onClick: () => edit(r.id) },
+          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
+        ];
+      });
     }
 
     async function printDoc(id) {

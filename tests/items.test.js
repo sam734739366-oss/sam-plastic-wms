@@ -287,6 +287,84 @@ test('items:save يرفض رصيداً أقل من صافي حركات السل�
   assert.equal(db.prepare('SELECT qty_salem FROM items WHERE id=?').get(id).qty_salem, 1300);
 });
 
+// ===== مخزن الرصيد الافتتاحي =====
+
+test('items:save يكتب الحركة الافتتاحية في المخزن المحدد ويعيدها في القائمة', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare("INSERT INTO warehouses (name) VALUES ('المخزن أ'), ('المخزن ب')").run();
+  const h = stubIpc();
+  const { id } = h['items:save'](null, {
+    code: '310', name: 'علبة ماء', unit_name: 'علبة', weight_grams: 10,
+    qty_salem: 100, opening_warehouse_id: 2,
+  }, 1);
+  const rows = db.prepare("SELECT * FROM stock_moves WHERE doc_type='opening' AND doc_id=?").all(id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].warehouse_id, 2, 'الحركة الافتتاحية في المخزن المختار');
+  const listed = h['items:list']().find(r => r.id === id);
+  assert.equal(listed.opening_warehouse_id, 2);
+});
+
+test('items:save يحفظ مخزن الافتتاح حتى بدون كميات', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare("INSERT INTO warehouses (name) VALUES ('أ'), ('ب')").run();
+  const h = stubIpc();
+  const { id } = h['items:save'](null, { code: '311', name: 'صنف بلا كميات', unit_name: 'حبة', opening_warehouse_id: 2 }, 1);
+  const row = db.prepare('SELECT opening_warehouse_id FROM items WHERE id=?').get(id);
+  assert.equal(row.opening_warehouse_id, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='opening' AND doc_id=?").get(id).c, 0);
+});
+
+test('items:save يرفض مخزناً غير موجود', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare("INSERT INTO warehouses (name) VALUES ('أ')").run();
+  const h = stubIpc();
+  assert.throws(() => h['items:save'](null, {
+    code: '312', name: 'صنف', unit_name: 'حبة', qty_salem: 10, opening_warehouse_id: 99,
+  }, 1), /المخزن/);
+});
+
+test('items:save: تغيير مخزن الافتتاح ينقل الحركات الافتتاحية للمخزن الجديد', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare("INSERT INTO warehouses (name) VALUES ('أ'), ('ب')").run();
+  const h = stubIpc();
+  const { id } = h['items:save'](null, { code: '313', name: 'غطاء', unit_name: 'غطاء', qty_salem: 100, opening_warehouse_id: 1 }, 1);
+  h['items:save'](null, { id, code: '313', name: 'غطاء محسن', unit_name: 'غطاء', qty_salem: 100, opening_warehouse_id: 2 }, 1);
+  const rows = db.prepare("SELECT warehouse_id, qty_in_pieces FROM stock_moves WHERE doc_type='opening' AND doc_id=?").all(id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].warehouse_id, 2, 'الحركة الافتتاحية انتقلت للمخزن الجديد');
+  assert.equal(rows[0].qty_in_pieces, 100);
+});
+
+test('items:save صنف له حركات: تغيير المخزن ينقل الافتتاح والفرق إلى المخزن الجديد', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  const id = seedMovedItem(db, h);
+  db.prepare("INSERT INTO warehouses (name) VALUES ('مخزن ثان')").run();
+  // الافتتاح الحالي (1000) في المخزن 1؛ ننقله للمخزن 2 مع رفع السليم إلى 1500
+  h['items:save'](null, {
+    id, code: '201', name: 'عبوة اختبار', unit_name: 'حبة', weight_grams: 10, qty_salem: 1500, opening_warehouse_id: 2,
+  }, 1);
+  assert.equal(netOf(db, id, 'salem'), 1500, 'العداد يطابق صافي الحركات بعد النقل');
+  const ops = db.prepare("SELECT warehouse_id, qty_in_pieces FROM stock_moves WHERE doc_type='opening' AND item_id=? AND bucket='salem'").all(id);
+  assert.equal(ops.length, 1, 'لا تكرار لحركة الافتتاح');
+  assert.equal(ops[0].warehouse_id, 2, 'الافتتاح في المخزن الجديد');
+  assert.equal(ops[0].qty_in_pieces, 1200, 'الفرق مستوعب في المخزن الجديد (1000 + 200)');
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='opening' AND item_id=? AND warehouse_id=1").get(id).c, 0);
+});
+
+test('items:import يكتب الحركة الافتتاحية في المخزن المحدد', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare("INSERT INTO warehouses (name) VALUES ('أ'), ('ب')").run();
+  const h = stubIpc();
+  h['items:import'](null, [{ code: '314', name: 'كيس', unit_name: 'كيس', qty_salem: 300 }], 1, 2);
+  const it = db.prepare('SELECT * FROM items WHERE code=?').get('314');
+  const m = db.prepare("SELECT warehouse_id, qty_in_pieces FROM stock_moves WHERE doc_type='opening' AND doc_id=?").get(it.id);
+  assert.ok(m, 'يجب إنشاء حركة افتتاحية للصنف المستورد');
+  assert.equal(m.warehouse_id, 2);
+  assert.equal(m.qty_in_pieces, 300);
+  assert.equal(it.opening_warehouse_id, 2);
+});
+
 test('items:save: تغيير وزن الحبة يعيد حساب أوزان كل حركات الصنف', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();

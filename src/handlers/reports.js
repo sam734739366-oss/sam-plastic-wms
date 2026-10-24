@@ -29,7 +29,13 @@ module.exports = function register(ipcMain) {
         COALESCE(SUM(m.qty_in_pieces),0) in_pieces,
         COALESCE(SUM(m.qty_out_pieces),0) out_pieces,
         COALESCE(SUM(m.qty_in_pieces),0) - COALESCE(SUM(m.qty_out_pieces),0) balance_pieces,
-        COALESCE(SUM(m.weight_in_kg),0) - COALESCE(SUM(m.weight_out_kg),0) balance_kg
+        COALESCE(SUM(m.weight_in_kg),0) - COALESCE(SUM(m.weight_out_kg),0) balance_kg,
+        (SELECT GROUP_CONCAT(DISTINCT pa.name) FROM purchase_items pi
+          JOIN purchases pu ON pu.id = pi.purchase_id JOIN parties pa ON pa.id = pu.party_id
+          WHERE pi.item_id = i.id AND pu.status != 'void' AND pa.name IS NOT NULL) suppliers,
+        (SELECT GROUP_CONCAT(DISTINCT pa.name) FROM invoice_items ii
+          JOIN invoices inv ON inv.id = ii.invoice_id JOIN parties pa ON pa.id = inv.party_id
+          WHERE ii.item_id = i.id AND inv.status != 'void' AND pa.name IS NOT NULL) customers
       FROM items i LEFT JOIN stock_moves m ON m.item_id = i.id${joinWh}
       WHERE i.is_complement = 0
       GROUP BY i.id${havingWh} ORDER BY i.code`).all(...params);
@@ -45,7 +51,8 @@ module.exports = function register(ipcMain) {
     if (filters.from) { where.push('m.doc_date >= ?'); params.push(filters.from); }
     if (filters.to) { where.push('m.doc_date <= ?'); params.push(filters.to); }
     const wh = where.length ? ' WHERE ' + where.join(' AND ') : '';
-    const rows = db.prepare(`SELECT m.id, m.doc_type, m.doc_number, m.doc_date, i.code, i.name, i.unit_name,
+    const rows = db.prepare(`SELECT m.id, m.doc_type, m.doc_id, m.doc_number, m.doc_date, m.item_id,
+        i.code, i.name, i.unit_name,
         i.weight_grams, i.pieces_per_carton, w.name warehouse_name,
         m.qty_in_pieces, m.qty_out_pieces, m.weight_in_kg, m.weight_out_kg, m.notes
       FROM stock_moves m

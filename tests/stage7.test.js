@@ -63,6 +63,27 @@ test('reports:inventory excludes complement items', () => {
   assert.ok(!all.find(r => r.id === 2));
 });
 
+test('reports:inventory يعرض أسماء الموردين والعملاء لكل صنف', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc(['purchases', 'sales', 'reports']);
+  // شراء الصنف 1 من المورد 1 ثم بيعه للعميل 2
+  h['purchases:save'](null, {
+    doc_number: 'P-SUP', doc_date: '2026-10-18', party_id: 1,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 1000, unit: 'حبة' }],
+  }, 1);
+  h['sales:save'](null, {
+    doc_number: 'S-CUS', doc_date: '2026-10-19', invoice_type: 'sale', party_id: 2,
+    payment_method: 'credit',
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 200, unit: 'حبة', unit_price: 10 }],
+  }, 1);
+  const row = h['reports:inventory'](null, {}).find(r => r.id === 1);
+  assert.ok(String(row.suppliers || '').includes('مورد تجريبي'), `الموردون: ${row.suppliers}`);
+  assert.ok(String(row.customers || '').includes('عميل تجريبي'), `العملاء: ${row.customers}`);
+  // صنف بلا تعاملات تبقى حقوله فارغة
+  const row2 = h['reports:inventory'](null, {}).find(r => r.id === 2);
+  assert.ok(!row2.suppliers && !row2.customers);
+});
+
 test('reports:movement computes running balance in date order', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales', 'reports']);

@@ -1,10 +1,10 @@
 import { register } from '../router.js';
 import { api } from '../api.js';
-import { toast, esc, openModal } from '../ui.js';
+import { toast, esc, openModal, attachRowMenu } from '../ui.js';
 import { fmtMoney } from '../fmt.js';
 
 const N = (n, d = 0) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: d });
-const DOC_LABEL = { opening: 'رصيد افتتاحي', purchase: 'شراء', issue: 'صرف إنتاج', receive: 'استلام', invoice: 'فاتورة', exit: 'خروج', scrap: 'تالف', transfer: 'نقل', production: 'نتيجة إنتاج' };
+const DOC_LABEL = { opening: 'رصيد افتتاحي', purchase: 'شراء', issue: 'صرف إنتاج', receive: 'استلام', invoice: 'فاتورة', exit: 'خروج', scrap: 'تالف', transfer: 'نقل', production: 'نتيجة إنتاج', sale_return: 'مرتجع بيع', purchase_return: 'مرتجع شراء' };
 const DISP_LABEL = { to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد', sold_scrap: 'بيع خردة' };
 const ACTION_LABEL = { create: 'إضافة', update: 'تعديل', delete: 'حذف', void: 'إلغاء', login: 'دخول', stock_write: 'تسجيل حركة مخزون' };
 
@@ -18,7 +18,7 @@ function selectHtml(id, options) {
 
 function tableHtml(columns, rows) {
   return `<div class="table-wrap"><table class="data"><thead><tr>${columns.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    <tbody>${rows.map((r, i) => `<tr data-ri="${i}">${r.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 register('reports', {
@@ -44,6 +44,8 @@ register('reports', {
           { key: 'code', label: 'الكود', cell: r => r.code },
           { key: 'name', label: 'الصنف', cell: r => r.name },
           { key: 'unit_name', label: 'الوحدة', cell: r => r.unit_name },
+          { key: 'suppliers', label: 'الموردون', cell: r => r.suppliers || '—' },
+          { key: 'customers', label: 'العملاء', cell: r => r.customers || '—' },
           { key: 'balance_label', label: 'الرصيد المخزني', cell: r => r.balance_label },
           { key: 'qty_salem', label: 'سليم', cell: r => N(r.qty_salem) },
           { key: 'qty_talef', label: 'تالف', cell: r => N(r.qty_talef) },
@@ -275,9 +277,55 @@ register('reports', {
         last = { kind, data, cols, cells: rows.map(row => cols.map(c => c.cell(row))) };
         tableWrap.innerHTML = tableHtml(cols, last.cells);
         if (r.foot) tableWrap.insertAdjacentHTML('beforeend', r.foot(data, cols));
+        attachRowMenu(tableWrap, (ri) => rowMenu(kind, rows[ri]));
         btnPrint.disabled = false;
         btnExport.disabled = false;
       } catch (e) { toast(String(e.message || e), 'err'); }
+    }
+
+    // قائمة كليك يمين على صفوف التقارير:
+    // - حركة الصنف: «عرض المستند» يفتح التصريح/الفاتورة الأصلية للحركة (كلك يمين مرتين = نفس النتيجة)
+    // - جرد المخزون: «عرض حركة الصنف» ينتقل لتقرير حركة الصنف مفلتراً بهذا الصنف
+    const MOVE_GET = {
+      purchase: ['purchases:get', 'purchase'],
+      issue: ['issues:get', 'issue'],
+      receive: ['receives:get', 'receive'],
+      invoice: ['sales:get', null],
+      exit: ['exits:get', 'exit'],
+      scrap: ['scrap:get', 'scrap'],
+      transfer: ['transfers:get', 'transfer'],
+      production: ['production:get', 'production'],
+      sale_return: ['returns:getSale', 'sale_return'],
+      purchase_return: ['returns:getPurchase', 'purchase_return'],
+    };
+    function rowMenu(rkind, row) {
+      if (!row) return [];
+      if (rkind === 'movement') {
+        return [{ label: 'عرض المستند', open: true, onClick: () => openMoveDoc(row) }];
+      }
+      if (rkind === 'inventory') {
+        return [{ label: 'عرض حركة الصنف', open: true, onClick: () => showItemMovement(row.id) }];
+      }
+      return [];
+    }
+    async function openMoveDoc(row) {
+      try {
+        const t = row.doc_type;
+        if (t === 'opening') { toast('رصيد افتتاحي — لا يوجد مستند لهذه الحركة'); return; }
+        const m = MOVE_GET[t];
+        if (!m) { toast('لا يمكن عرض مستند لهذه الحركة'); return; }
+        const doc = await api.invoke(m[0], row.doc_id);
+        const kind0 = m[1] || (doc.invoice_type === 'scrap' ? 'scrap' : 'invoice');
+        await api.invoke('print:open', { kind: kind0, doc, settings: await api.invoke('settings:get') });
+      } catch (e) { toast(String(e.message || e), 'err'); }
+    }
+    function showItemMovement(itemId) {
+      kind = 'movement';
+      renderTabs();
+      renderFilters();
+      const sel = el.querySelector('#r-item');
+      if (sel) sel.value = String(itemId);
+      run();
     }
 
     el.querySelector('#btn-cols').onclick = () => {

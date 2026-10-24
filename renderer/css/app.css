@@ -323,6 +323,7 @@ body {
   left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important;
   border-radius: 0; border: none;
 }
+.win.max .pop-body { max-height: none; }
 .win-bar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 12px 0 6px; height: 40px; flex-shrink: 0;
@@ -812,3 +813,20 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin-left: 0; margin-r
 @media (prefers-reduced-motion: reduce) {
   .factory-scene *, .factory-strip *, .factory-scene *::after, .factory-strip *::after { animation: none !important; }
 }
+
+/* ===== قائمة كليك يمين على صفوف الجداول ===== */
+.ctx-menu {
+  position: fixed; z-index: 99999; min-width: 170px;
+  background: #fff; border: 1px solid rgba(15, 23, 42, .16);
+  border-radius: 10px; padding: 6px;
+  box-shadow: 0 14px 38px rgba(2, 6, 23, .28), 0 3px 10px rgba(2, 6, 23, .14);
+}
+.ctx-item {
+  display: block; width: 100%; text-align: right;
+  padding: 8px 12px; border: none; background: none;
+  color: #0f172a; font-family: inherit; font-size: 13.5px; font-weight: 600;
+  border-radius: 7px; cursor: pointer; white-space: nowrap;
+}
+.ctx-item:hover { background: #eef3ff; color: #1e40af; }
+.ctx-item.danger { color: #b91c1c; }
+.ctx-item.danger:hover { background: #fdeaea; color: #b91c1c; }

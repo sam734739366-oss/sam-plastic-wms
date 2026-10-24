@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc } from '../ui.js';
 
 register('machines', {
   title: 'المكائن',
@@ -21,21 +21,14 @@ register('machines', {
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'name', label: 'الاسم' },
         { key: 'notes', label: 'ملاحظات', render: r => r.notes || '—' },
-        {
-          key: 'actions', label: '',
-          render: (r) => `<button class="btn mini" data-edit="${r.id}">تعديل</button>
-            <button class="btn mini danger" data-del="${r.id}">حذف</button>`,
-        },
       ], rows);
 
-      el.querySelectorAll('[data-edit]').forEach(b => {
-        b.onclick = () => edit(rows.find(r => r.id === Number(b.dataset.edit)), refresh);
-      });
-      el.querySelectorAll('[data-del]').forEach(b => {
-        b.onclick = async () => {
-          const r = rows.find(x => x.id === Number(b.dataset.del));
-          if (!r) return;
-          if (await confirmDialog(`حذف المكينة «${esc(r.name)}»؟`)) {
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
+        const r = rows[ri];
+        return [
+          { label: 'تعديل', open: true, onClick: () => edit(r, refresh) },
+          { label: 'حذف', danger: true, onClick: async () => {
+            if (!(await confirmDialog(`حذف المكينة «${esc(r.name)}»؟`))) return;
             try {
               await api.invoke('machines:delete', r.id, currentUser().id);
               toast('تم الحذف', 'ok');
@@ -43,8 +36,8 @@ register('machines', {
             } catch (e) {
               toast(String(e.message || e), 'err');
             }
-          }
-        };
+          } },
+        ];
       });
     }
 
