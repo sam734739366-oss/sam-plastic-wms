@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance, applySalemDelta } = require('../stock');
+const { writeMoves, voidDoc, getBalance, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 module.exports = function register(ipcMain) {
@@ -55,23 +55,26 @@ module.exports = function register(ipcMain) {
       }
       const moves = [];
       const insItem = db.prepare(`INSERT INTO exit_items
-        (exit_permit_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, notes)
-        VALUES (?,?,?,?,?,?,?,?)`);
+        (exit_permit_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, notes, bucket)
+        VALUES (?,?,?,?,?,?,?,?,?)`);
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
         const pieces = toPieces(it.quantity, it.unit, item);
         if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
+        const bucket = ['salem', 'talef', 'muharraz'].includes(it.bucket) ? it.bucket : 'salem';
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         const bal = getBalance(db, it.item_id, it.warehouse_id);
-        if (bal.balance_pieces < pieces) throw new Error(`الرصيد غير كافٍ للصنف ${item.code} (المطلوب ${pieces} حبة والمتوفر ${bal.balance_pieces})`);
-        moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket: 'salem', notes: it.notes });
-        insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, it.notes || null);
+        const available = bal[`qty_${bucket}`] || 0;
+        const bucketLabel = { salem: 'السليم', talef: 'التالف', muharraz: 'المحرز' }[bucket];
+        if (available < pieces) throw new Error(`رصيد ${bucketLabel} غير كافٍ للصنف ${item.code} (المطلوب ${pieces} حبة والمتوفر ${available})`);
+        moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket, notes: it.notes });
+        insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, it.notes || null, bucket);
       }
       writeMoves(db, 'exit', id, number, doc.doc_date, moves, userId);
-      // الخروج يخصم السليم: عكس أثر البنود القديمة ثم تطبيق الجديدة
-      if (oldItems.length) applySalemDelta(db, oldItems, 1);
-      applySalemDelta(db, moves, -1);
+      // الخروج يخصم سلة كل بند: عكس أثر البنود القديمة ثم تطبيق الجديدة
+      if (oldItems.length) applyBucketsDelta(db, oldItems, 1);
+      applyBucketsDelta(db, moves, -1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'exit_permit', id, before, doc);
     return { id };
@@ -84,7 +87,7 @@ module.exports = function register(ipcMain) {
     const oldItems = db.prepare('SELECT * FROM exit_items WHERE exit_permit_id=?').all(id);
     withTransaction(db, () => {
       voidDoc(db, 'exit', id, userId);
-      applySalemDelta(db, oldItems, 1);
+      applyBucketsDelta(db, oldItems, 1);
       db.prepare(`UPDATE exit_permits SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'exit_permit', id, before, null);

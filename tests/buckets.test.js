@@ -166,3 +166,22 @@ test('صرف بند تالف يتجاوز الرصيد التالف يُرفض �
   h['issues:void'](null, iid, 1);
   assert.equal(db.prepare('SELECT qty_talef FROM items WHERE id=?').get(id).qty_talef, 10);
 });
+
+test('خروج بند محرز يتجاوز الرصيد المحرز يُرفض والمحرز المتاح يخصم', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc('warehouses', 'items', 'exits');
+  h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
+  const { id } = h['items:save'](null, { code: '604', name: 'عبوة', unit_name: 'حبة', qty_salem: 50, qty_talef: 0, qty_muharraz: 20 }, 1);
+  const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
+  assert.throws(() => h['exits:save'](null, {
+    doc_number: 'خ-1', doc_date: '2026-10-25', warehouse_id: wh, driver_name: 'أحمد',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 30, unit: 'حبة', bucket: 'muharraz' }],
+  }, 1), /غير كاف/);
+  h['exits:save'](null, {
+    doc_number: 'خ-2', doc_date: '2026-10-25', warehouse_id: wh, driver_name: 'أحمد',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 10, unit: 'حبة', bucket: 'muharraz' }],
+  }, 1);
+  const it = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(it.qty_salem, 50);
+  assert.equal(it.qty_muharraz, 10);
+});
