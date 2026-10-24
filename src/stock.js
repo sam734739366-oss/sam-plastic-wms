@@ -45,6 +45,24 @@ function applyBucketDelta(db, items, sign, key) {
 function applySalemDelta(db, items, sign) { return applyBucketDelta(db, items, sign, 'salem'); }
 function applyTalefDelta(db, items, sign) { return applyBucketDelta(db, items, sign, 'talef'); }
 
+// تطبيق دلتا سلات مزدوجة (صنف × سلة) لبند قد يحوي سلات مختلفة: +داخل أو -خارج.
+// يقبل بنود المستندات (pieces + bucket) وحركات المخزون (qty_in/out + bucket).
+function applyBucketsDelta(db, rows, sign) {
+  const byPair = new Map();
+  for (const it of rows) {
+    const itemId = it.item_id;
+    const bucket = ['salem', 'talef', 'muharraz'].includes(it.bucket) ? it.bucket : 'salem';
+    const pieces = Math.abs(it.pieces != null ? it.pieces : ((it.qty_in_pieces || 0) - (it.qty_out_pieces || 0)));
+    if (!itemId || !pieces) continue;
+    const key = `${itemId}:${bucket}`;
+    byPair.set(key, (byPair.get(key) || 0) + pieces);
+  }
+  for (const [key, pieces] of byPair) {
+    const [itemId, bucket] = key.split(':');
+    bucketsDelta(db, Number(itemId), { [bucket]: sign * pieces });
+  }
+}
+
 function writeMoves(db, docType, docId, docNumber, docDate, rows, userId) {
   withTransaction(db, () => {
     const old = db.prepare('SELECT * FROM stock_moves WHERE doc_type=? AND doc_id=?').all(docType, docId);
@@ -100,4 +118,4 @@ function getBalance(db, itemId, warehouseId) {
     FROM stock_moves WHERE item_id=? AND warehouse_id=?`).get(itemId, warehouseId);
 }
 
-module.exports = { writeMoves, voidDoc, getBalance, bucketsDelta, applyBucketDelta, applySalemDelta, applyTalefDelta };
+module.exports = { writeMoves, voidDoc, getBalance, bucketsDelta, applyBucketDelta, applySalemDelta, applyTalefDelta, applyBucketsDelta };

@@ -98,3 +98,23 @@ test('ترحيل أعمدة السلة: بنود الخردة تالف ومرت�
   assert.equal(db.prepare('SELECT bucket FROM sales_return_items WHERE return_id=1').get().bucket, 'salem');
   assert.equal(db.prepare('SELECT bucket FROM purchase_items').all().length, 0);
 });
+
+test('applyBucketsDelta تجمّع دلتا كل سلة لصنف مكرر بنود بسلات مختلفة', () => {
+  const db = makeDb();
+  db.prepare("INSERT INTO items (code, name, unit_name) VALUES ('902', 'عبوة', 'حبة')").run();
+  const { applyBucketsDelta } = require('../src/stock');
+  applyBucketsDelta(db, [
+    { item_id: 1, pieces: 10, bucket: 'salem' },
+    { item_id: 1, pieces: 4, bucket: 'talef' },
+    { item_id: 1, pieces: 2, bucket: 'talef' },
+    { item_id: 1, pieces: 1, bucket: 'muharraz' },
+  ], 1);
+  const it = db.prepare('SELECT * FROM items WHERE id=1').get();
+  assert.equal(it.qty_salem, 10);
+  assert.equal(it.qty_talef, 6);
+  assert.equal(it.qty_muharraz, 1);
+  // عكس الإشارة يعيد العدادات للصفر
+  applyBucketsDelta(db, [{ item_id: 1, pieces: 10, bucket: 'salem' }, { item_id: 1, pieces: 6, bucket: 'talef' }, { item_id: 1, pieces: 1, bucket: 'muharraz' }], -1);
+  const it2 = db.prepare('SELECT * FROM items WHERE id=1').get();
+  assert.equal(it2.qty_salem + it2.qty_talef + it2.qty_muharraz, 0);
+});
