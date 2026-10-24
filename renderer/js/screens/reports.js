@@ -171,6 +171,28 @@ register('reports', {
         ],
         foot: (data) => `<div class="notes"><b>إجمالي المشتريات: ${fmtMoney(data.total)} — عدد الفواتير: ${data.rows.length}</b></div>`,
       },
+      sales: {
+        label: 'فواتير البيع المرحلة',
+        filterHtml: () => `
+          <div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
+          <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>
+          <div class="field"><label>العميل</label>${selectHtml('r-party', [{ value: '', label: 'كل العملاء' }, ...parties.filter(p => p.type !== 'supplier').map(p => ({ value: p.id, label: p.name }))])}</div>`,
+        getFilters: (el) => ({
+          from: el.querySelector('#r-from').value || null,
+          to: el.querySelector('#r-to').value || null,
+          partyId: Number(el.querySelector('#r-party').value) || null,
+        }),
+        columns: [
+          { key: 'doc_number', label: 'الرقم', cell: r => r.doc_number },
+          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
+          { key: 'party_name', label: 'العميل', cell: r => r.party_name || '—' },
+          { key: 'invoice_type', label: 'النوع', cell: r => r.invoice_type === 'sale' ? 'بيع' : r.invoice_type },
+          { key: 'total_pieces', label: 'الحبات', cell: r => N(r.total_pieces) },
+          { key: 'total', label: 'الإجمالي', cell: r => fmtMoney(r.total) },
+          { key: 'notes', label: 'ملاحظات', cell: r => r.notes || '' },
+        ],
+        foot: (data) => `<div class="notes"><b>إجمالي الفواتير: ${fmtMoney(data.total)} — عددها: ${data.rows.length} — الحبات: ${N(data.rows.reduce((s, r) => s + (Number(r.total_pieces) || 0), 0))}</b></div>`,
+      },
       audit: {
         label: 'سجل التدقيق',
         filterHtml: () => `
