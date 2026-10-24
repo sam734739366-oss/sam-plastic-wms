@@ -47,12 +47,16 @@ const ROLE_SCREENS = {
   manager: null,
   clerk: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
     'purchases', 'issues', 'production', 'receives', 'cartons', 'returns',
+    'posting', 'salesreturns',
     'scrap', 'tolling', 'transfers', 'stock', 'reports'],
   viewer: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
     'purchases', 'issues', 'production', 'receives', 'cartons', 'returns',
+    'posting', 'salesreturns',
     'scrap', 'tolling', 'transfers', 'stock', 'reports', 'audit'],
   warehouse: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
-    'purchases', 'issues', 'production', 'receives', 'cartons', 'scrap', 'transfers', 'stock', 'returns', 'reports'],
+    'purchases', 'issues', 'production', 'receives', 'cartons', 'scrap', 'transfers', 'stock', 'returns',
+    'posting', 'salesreturns',
+    'reports'],
 };
 const allowed = (screen) => {
   const list = ROLE_SCREENS[u.role];
@@ -102,6 +106,8 @@ import './screens/production.js';
 import './screens/receives.js';
 import './screens/cartons.js';
 import './screens/returns.js';
+import './screens/posting.js';
+import './screens/salesreturns.js';
 import './screens/scrap.js';
 import './screens/tolling.js';
 import './screens/transfers.js';
