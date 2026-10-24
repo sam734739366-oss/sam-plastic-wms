@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance, applySalemDelta } = require('../stock');
+const { writeMoves, voidDoc, getBalance, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 module.exports = function register(ipcMain) {
@@ -79,8 +79,8 @@ module.exports = function register(ipcMain) {
       }
       const moves = [];
       const insItem = db.prepare(`INSERT INTO issue_items
-        (issue_permit_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, carton_ids, notes)
-        VALUES (?,?,?,?,?,?,?,?,?)`);
+        (issue_permit_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, carton_ids, notes, bucket)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`);
       const issueCarton = db.prepare(`UPDATE cartons SET status='issued', issue_date=?, issue_permit_id=?
         WHERE carton_number=? AND status='in_stock'`);
       for (const it of doc.items) {
@@ -88,23 +88,26 @@ module.exports = function register(ipcMain) {
         if (!item) throw new Error('صنف غير موجود');
         const pieces = toPieces(it.quantity, it.unit, item);
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
+        const bucket = ['salem', 'talef', 'muharraz'].includes(it.bucket) ? it.bucket : 'salem';
         const cartonIds = (it.carton_ids || []).filter(Boolean);
         if (doc.source === 'own') {
           const bal = getBalance(db, it.item_id, it.warehouse_id);
-          if (bal.balance_pieces < pieces) throw new Error(`الرصيد غير كافٍ للصنف ${item.code} (المطلوب ${pieces} حبة والمتوفر ${bal.balance_pieces})`);
-          moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket: 'salem', notes: it.notes });
+          const available = bal[`qty_${bucket}`] || 0;
+          const bucketLabel = { salem: 'السليم', talef: 'التالف', muharraz: 'المحرز' }[bucket];
+          if (available < pieces) throw new Error(`رصيد ${bucketLabel} غير كافٍ للصنف ${item.code} (المطلوب ${pieces} حبة والمتوفر ${available})`);
+          moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket, notes: it.notes });
           for (const cn of cartonIds) {
             const r = issueCarton.run(doc.doc_date, id, cn);
             if (r.changes === 0) throw new Error(`الكرتون ${cn} غير متاح في المخزن`);
           }
         }
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg,
-          cartonIds.length ? JSON.stringify(cartonIds) : null, it.notes || null);
+          cartonIds.length ? JSON.stringify(cartonIds) : null, it.notes || null, bucket);
       }
       writeMoves(db, 'issue', id, number, doc.doc_date, moves, userId);
-      // أرصدة سليم/تالف/محرز: صرف المصنع ينقص السليم (وعكس القديم عند التعديل — وخام العميل بلا أثر مخزني)
-      if (oldItems.length && before.source === 'own') applySalemDelta(db, oldItems, 1);
-      applySalemDelta(db, moves, -1);
+      // أرصدة سليم/تالف/محرز: صرف المصنع يخصم سلة كل بند (وعكس القديم عند التعديل — وخام العميل بلا أثر مخزني)
+      if (oldItems.length && before.source === 'own') applyBucketsDelta(db, oldItems, 1);
+      applyBucketsDelta(db, moves, -1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'issue_permit', id, before, doc);
     return { id };
@@ -124,7 +127,7 @@ module.exports = function register(ipcMain) {
     withTransaction(db, () => {
       db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);
       voidDoc(db, 'issue', id, userId);
-      if (before.source === 'own') applySalemDelta(db, oldItems, 1);
+      if (before.source === 'own') applyBucketsDelta(db, oldItems, 1);
       db.prepare(`UPDATE issue_permits SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'issue_permit', id, before, null);

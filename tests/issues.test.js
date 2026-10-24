@@ -88,7 +88,7 @@ test('issues:save rejects insufficient balance', () => {
   assert.throws(() => h['issues:save'](null, {
     doc_number: 'I-1', doc_date: '2026-10-18', source: 'own',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 999, unit: 'كرتون' }]
-  }, 1), /الرصيد غير كافٍ/);
+  }, 1), /رصيد السليم غير كافٍ/);
 });
 
 test('issues:save customer source does not move factory stock nor salem', () => {

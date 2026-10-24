@@ -143,3 +143,26 @@ test('فاتورة شراء بسلات مختلفة تزيد كل عداد سل�
   h['purchases:void'](null, pid, 1);
   assert.equal(inv().qty_salem + inv().qty_talef + inv().qty_muharraz, 0);
 });
+
+test('صرف بند تالف يتجاوز الرصيد التالف يُرفض برسالة السلة', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc('warehouses', 'items', 'issues');
+  h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
+  const { id } = h['items:save'](null, { code: '603', name: 'عبوة', unit_name: 'حبة', qty_salem: 100, qty_talef: 10, qty_muharraz: 0 }, 1);
+  const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
+  assert.throws(() => h['issues:save'](null, {
+    doc_number: 'ص-1', doc_date: '2026-10-25', source: 'own',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 50, unit: 'حبة', bucket: 'talef' }],
+  }, 1), /غير كاف/);
+  // صرف تالف ضمن المتاح ينجح ويخصم التالف فقط
+  const { id: iid } = h['issues:save'](null, {
+    doc_number: 'ص-2', doc_date: '2026-10-25', source: 'own',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 5, unit: 'حبة', bucket: 'talef' }],
+  }, 1);
+  const it = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(it.qty_salem, 100);
+  assert.equal(it.qty_talef, 5);
+  // عكس الأثر: إلغاء التصريح يعيد التالف
+  h['issues:void'](null, iid, 1);
+  assert.equal(db.prepare('SELECT qty_talef FROM items WHERE id=?').get(id).qty_talef, 10);
+});
