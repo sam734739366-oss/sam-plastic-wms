@@ -8,22 +8,55 @@ const { setDb, migrate, repairOpenings } = require('../src/db');
 const ledger = require('../src/ledger');
 const { getBalance } = require('../src/stock');
 
-// دورة كاملة على نسخة من القاعدة الحية: إصلاح الأرصدة الافتتاحية ثم تنفيذ كل
-// العمليات المخزنية والمحاسبية عبر المعالجات الحقيقية مع فحص التطابق في كل مرحلة:
+// دورة كاملة على قاعدة أساسية حتمية (ملف مؤقت يُبنى من المخطط ويُبذر ببيانات ثابتة):
+// إصلاح الأرصدة الافتتاحية ثم تنفيذ كل العمليات المخزنية والمحاسبية عبر المعالجات
+// الحقيقية مع فحص التطابق في كل مرحلة:
 //   عداد الصنف (سليم/تالف/محرز) == صافي حركات المخزون للسلة نفسها.
-// القيم المتوقعة محسوبة من خط أساس يُقرأ من القاعدة نفسها (وليس أرقاماً ثابتة)
-// كي يبقى الاختبار صالحاً مهما أضاف المستخدم مستندات جديدة للقاعدة الحية.
+// القيم المتوقعة محسوبة من خط أساس يُقرأ من القاعدة نفسها (وليس أرقاماً ثابتة).
 
-function liveCopy() {
-  const live = path.join(__dirname, '..', 'data', 'samplastic.db');
+function fixtureDb() {
   const tmp = path.join(os.tmpdir(), `fullcycle-${process.pid}-${Date.now()}.db`);
-  const src = new DatabaseSync(live, { readOnly: true });
-  src.exec(`VACUUM INTO '${tmp.replace(/\\/g, '/')}'`);
-  src.close();
   const d = new DatabaseSync(tmp);
   d.exec('PRAGMA foreign_keys = ON');
   d.exec(fs.readFileSync(path.join(__dirname, '..', 'src', 'schema.sql'), 'utf8'));
   migrate(d);
+
+  d.prepare("INSERT INTO users (id, username, full_name, password_hash, role) VALUES (1,'admin','المدير','x','manager')").run();
+  d.prepare("INSERT INTO warehouses (id, name, location) VALUES (1,'المخزن الرئيسي','داخل المصنع')").run();
+  d.prepare("INSERT INTO warehouses (id, name, location) VALUES (7,'مخزن الإنتاج','داخل المصنع')").run();
+  d.prepare("INSERT INTO parties (id, name, type) VALUES (1,'مورد الشرق للبلاستيك','supplier')").run();
+  d.prepare("INSERT INTO parties (id, name, type) VALUES (2,'مصنع المأمون للنفخ','both')").run();
+  d.prepare("INSERT INTO parties (id, name, type) VALUES (3,'تاجر الجملة','customer')").run();
+
+  // أصناف ثابتة بأرصدة افتتاحية متسقة (العداد == صافي الحركات)
+  const items = [
+    { id: 1, code: '001001', name: 'امبول 20.5 وسط / النهدين', unit: 'امبول', weight: 20.5, carton: 12852, salem: 100000 },
+    { id: 2, code: '001002', name: 'امبول 10 وسط / النهدين', unit: 'حبة', salem: 100 },
+    { id: 3, code: '001003', name: 'امبول 15 وسط / النهدين', unit: 'حبة', salem: 100 },
+    { id: 4, code: '001010', name: 'غطاء الكوسفن', unit: 'غطاء', salem: 165000, complement: 1 },
+    { id: 5, code: '002001', name: 'علبه الخطيب 500 مل', unit: 'علبة', bag: 250, salem: 22100 },
+    { id: 6, code: '002004', name: 'علبه الخطيب 1.2لتر', unit: 'علبة', bag: 100, salem: 25000 },
+    { id: 7, code: '002024', name: 'علبه القيصر', unit: 'علبة', bag: 500, salem: 70000 },
+  ];
+  const insItem = d.prepare(`INSERT INTO items (id, code, name, unit_name, weight_grams,
+    pieces_per_carton, pieces_per_bag, qty_salem, is_complement)
+    VALUES (?,?,?,?,?,?,?,?,?)`);
+  const insMove = d.prepare(`INSERT INTO stock_moves (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+    qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, bucket, notes)
+    VALUES (?,?,?,?,?,?,?,0,?,0,?,?)`);
+  for (const it of items) {
+    insItem.run(it.id, it.code, it.name, it.unit, it.weight || null, it.carton || null,
+      it.bag || null, it.salem, it.complement || 0);
+    if (it.salem > 0) insMove.run('opening', it.id, `افتتاحي-${it.code}`, '2026-10-23', it.id, 1,
+      it.salem, it.salem * (it.weight || 0) / 1000, 'salem', 'رصيد افتتاحي (سليم)');
+  }
+  // حركة شراء غير افتتاحية للصنف 001001 (+100) مع إنقاص افتتاحه للمحافظة على الاتساق
+  // (تُستعمل في اختبار الإصلاح: الافتتاح الصحيح = العداد − صافي العمليات)
+  d.prepare(`UPDATE stock_moves SET qty_in_pieces = qty_in_pieces - 100,
+      weight_in_kg = weight_in_kg - 100 * 20.5 / 1000
+    WHERE doc_type='opening' AND item_id=1 AND bucket='salem'`).run();
+  insMove.run('purchase', 999999, 'FIX-P1', '2026-10-23', 1, 1, 100, 100 * 20.5 / 1000, 'salem', 'حركة أساسية للاختبار');
+
   return { d, tmp };
 }
 
@@ -50,12 +83,11 @@ function assertConsistent(db, label) {
   }
 }
 
-test('إصلاح الأرصدة الافتتاحية: مصححة في القاعدة الحية ويعيد بناء أي تضخم قديم', () => {
-  const { d, tmp } = liveCopy();
+test('إصلاح الأرصدة الافتتاحية: مصححة في الأساس ويعيد بناء أي تضخم قديم', () => {
+  const { d, tmp } = fixtureDb();
   try {
     setDb(d);
-    // القاعدة الحية بعد الإصلاح: الافتتاح = العداد − صافي العمليات (يُقرأ ديناميكياً
-    // لأن الحذف الوحيد للأقسام الملغاة يعيد امتصاص أثر مستنداتها في الافتتاح)
+    // الأساس المبذور: الافتتاح = العداد − صافي العمليات (يُقرأ ديناميكياً)
     const row1 = d.prepare('SELECT * FROM items WHERE id=1').get();
     const net1 = d.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n
       FROM stock_moves WHERE doc_type != 'opening' AND item_id=1 AND bucket='salem'`).get().n;
@@ -84,15 +116,15 @@ test('إصلاح الأرصدة الافتتاحية: مصححة في القاع
   }
 });
 
-test('الدورة الكاملة للعمليات المخزنية والمحاسبية على نسخة القاعدة الحية', () => {
-  const { d, tmp } = liveCopy();
+test('الدورة الكاملة للعمليات المخزنية والمحاسبية على القاعدة الأساسية', () => {
+  const { d, tmp } = fixtureDb();
   try {
     setDb(d);
     repairOpenings(d);
     const h = stubIpc(['purchases', 'issues', 'production', 'receives', 'returns',
       'sales', 'scrap', 'transfers', 'exits', 'payments', 'tolling', 'reports']);
 
-    // ===== خط الأساس: يُقرأ من القاعدة الحية نفسها =====
+    // ===== خط الأساس: يُقرأ من القاعدة الأساسية نفسها =====
     assertConsistent(d, 'الأساس');
     const b1 = counters(d, 1), b2 = counters(d, 2), b3 = counters(d, 3);
     const b5 = counters(d, 5), b6 = counters(d, 6), b7 = counters(d, 7);
