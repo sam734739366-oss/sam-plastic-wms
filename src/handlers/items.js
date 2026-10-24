@@ -57,8 +57,9 @@ module.exports = function register(ipcMain) {
 
     const isNew = !row.id;
     const before = isNew ? null : db.prepare('SELECT * FROM items WHERE id=?').get(row.id);
-    // كميات سليم/تالف/محرز تُحرَّك تلقائياً من المستندات؛ تُقبل كأرصدة افتتاحية فقط
-    // لصنف جديد أو صنف لم تتحرك له حركات مخزون بعد.
+    if (!isNew && !before) throw new Error('الصنف غير موجود');
+    // الكميات قابلة للتعديل دائماً: لأصناف لها حركات يُستوعب الفرق في الحركة
+    // الافتتاحية (الافتتاح = العداد − صافي الحركات) ويُعاد حساب الأوزان المخزنة.
     const hasMoves = !isNew && db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE item_id=? AND doc_type != 'opening'").get(row.id).c > 0;
     let id = row.id;
     const fields = {
@@ -73,23 +74,22 @@ module.exports = function register(ipcMain) {
       is_complement: row.is_complement ? 1 : 0,
       notes: row.notes || null,
     };
-    if (id) {
-      const updateSql = `UPDATE items SET code=@code,name=@name,unit_name=@unit_name,weight_grams=@weight_grams,
-        pieces_per_carton=@pieces_per_carton,pieces_per_shadda=@pieces_per_shadda,pieces_per_bag=@pieces_per_bag,
-        is_complement=@is_complement,
-        ${hasMoves ? '' : 'qty_salem=@qty_salem,qty_talef=@qty_talef,qty_muharraz=@qty_muharraz,'}
-        notes=@notes WHERE id=@id`;
-      const params = {
-        code, name, unit_name: unit, weight_grams: fields.weight_grams,
-        pieces_per_carton: fields.pieces_per_carton, pieces_per_shadda: fields.pieces_per_shadda,
-        pieces_per_bag: fields.pieces_per_bag, is_complement: fields.is_complement, notes: fields.notes, id,
-      };
-      if (!hasMoves) {
-        params.qty_salem = fields.qty_salem;
-        params.qty_talef = fields.qty_talef;
-        params.qty_muharraz = fields.qty_muharraz;
+    let netOf = () => 0;
+    if (hasMoves) {
+      const netRows = db.prepare(`SELECT bucket, COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) net
+        FROM stock_moves WHERE doc_type != 'opening' AND item_id=? GROUP BY bucket`).all(row.id);
+      netOf = (bucket) => { const r = netRows.find(x => x.bucket === bucket); return r ? r.net : 0; };
+      for (const [key, label] of [['salem', 'سليم'], ['talef', 'تالف'], ['muharraz', 'محرز']]) {
+        const counter = fields[`qty_${key}`];
+        const net = netOf(key);
+        if (counter < net) throw new Error(`رصيد ${label} المطلوب (${counter}) أقل من صافي حركات السلة (${net}) — اعكس الحركات أولاً أو ارفع الرصيد`);
       }
-      db.prepare(updateSql).run(params);
+    }
+    if (id) {
+      db.prepare(`UPDATE items SET code=@code,name=@name,unit_name=@unit_name,weight_grams=@weight_grams,
+        pieces_per_carton=@pieces_per_carton,pieces_per_shadda=@pieces_per_shadda,pieces_per_bag=@pieces_per_bag,
+        qty_salem=@qty_salem,qty_talef=@qty_talef,qty_muharraz=@qty_muharraz,
+        is_complement=@is_complement,notes=@notes WHERE id=@id`).run({ ...fields, id });
     } else {
       id = db.prepare(`INSERT INTO items (code,name,item_group,unit_name,weight_grams,pieces_per_carton,
         pieces_per_shadda,pieces_per_bag,qty_salem,qty_talef,qty_muharraz,is_complement,notes)
@@ -97,8 +97,45 @@ module.exports = function register(ipcMain) {
         @qty_salem,@qty_talef,@qty_muharraz,@is_complement,@notes)`)
         .run(fields).lastInsertRowid;
     }
-    // الأرصدة الافتتاحية تنعكس كحركة مخزون حتى تظهر في الجرد والتقارير وتصبح قابلة للصرف والبيع
-    if (isNew || !hasMoves) syncOpeningMoves(db, id, userId);
+    if (hasMoves) {
+      const qtyChanged = ['salem', 'talef', 'muharraz'].some(k => Number(before[`qty_${k}`]) !== fields[`qty_${k}`]);
+      const weightChanged = Number(before.weight_grams || 0) !== Number(fields.weight_grams || 0);
+      // وزن الحبة الجديد ينعكس على كل حركات الصنف المخزنة (الحبات × الوزن / 1000)
+      if (weightChanged && Number(fields.weight_grams) > 0) {
+        db.prepare(`UPDATE stock_moves SET weight_in_kg = qty_in_pieces * ? / 1000,
+          weight_out_kg = qty_out_pieces * ? / 1000 WHERE item_id=?`).run(fields.weight_grams, fields.weight_grams, row.id);
+      }
+      // فرق الكميات يُستوعب في الحركة الافتتاحية لكل سلة
+      if (qtyChanged || weightChanged) {
+        const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get();
+        if (wh) {
+          const today = new Date().toISOString().slice(0, 10);
+          const ins = db.prepare(`INSERT INTO stock_moves
+            (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+             qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, bucket, notes)
+            VALUES ('opening',?,?,?,?,?,?,0,?,0,?,?)`);
+          const upd = db.prepare('UPDATE stock_moves SET qty_in_pieces=?, weight_in_kg=? WHERE id=?');
+          for (const [key, label] of [['salem', 'سليم'], ['talef', 'تالف'], ['muharraz', 'محرز']]) {
+            const qty = fields[`qty_${key}`] - netOf(key);
+            const w = qty * (Number(fields.weight_grams) || 0) / 1000;
+            const existing = db.prepare(`SELECT id FROM stock_moves
+              WHERE doc_type='opening' AND item_id=? AND bucket=?`).get(row.id, key);
+            if (qty > 0) {
+              if (existing) upd.run(qty, w, existing.id);
+              else ins.run(row.id, `افتتاحي-${fields.code}`, today, row.id, wh.id, qty, w, key, `رصيد افتتاحي (${label})`);
+            } else if (existing) {
+              db.prepare('DELETE FROM stock_moves WHERE id=?').run(existing.id);
+            }
+          }
+          audit(db, userId, 'stock_write', 'opening', row.id, null, {
+            resynced: true, qty_changed: qtyChanged, weight_changed: weightChanged,
+          });
+        }
+      }
+    } else {
+      // الأرصدة الافتتاحية تنعكس كحركة مخزون حتى تظهر في الجرد والتقارير وتصبح قابلة للصرف والبيع
+      syncOpeningMoves(db, id, userId);
+    }
     audit(db, userId, isNew ? 'create' : 'update', 'item', id, before, fields);
     return { id };
   });

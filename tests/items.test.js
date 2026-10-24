@@ -123,7 +123,7 @@ test('items:list returns has_moves flag', () => {
   assert.equal(rows.find(r => r.id === id).has_moves, 1);
 });
 
-test('items:save update ignores qty fields when item has stock moves', () => {
+test('items:save update applies qty fields when item has stock moves (difference absorbed into opening)', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
   const { id } = h['items:save'](null, { code: '111', name: 'علبة زيت', unit_name: 'علبة', qty_salem: 100, qty_talef: 5, qty_muharraz: 0 }, 1);
@@ -133,9 +133,14 @@ test('items:save update ignores qty fields when item has stock moves', () => {
   h['items:save'](null, { id, code: '111', name: 'علبة زيت محسن', unit_name: 'علبة', qty_salem: 999, qty_talef: 999, qty_muharraz: 999 }, 1);
   const row = db.prepare('SELECT * FROM items WHERE id=?').get(id);
   assert.equal(row.name, 'علبة زيت محسن');
-  assert.equal(row.qty_salem, 100); // الأرصدة تُحفظ من الحركات فقط
-  assert.equal(row.qty_talef, 5);
-  assert.equal(row.qty_muharraz, 0);
+  assert.equal(row.qty_salem, 999); // الكميات تُعدَّل والفرق يُستوعب في حركة الافتتاح
+  assert.equal(row.qty_talef, 999);
+  assert.equal(row.qty_muharraz, 999);
+  for (const b of ['salem', 'talef', 'muharraz']) {
+    const n = db.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n
+      FROM stock_moves WHERE item_id=? AND bucket=?`).get(id, b).n;
+    assert.equal(n, 999, `صافي حركات سلة ${b} يجب أن يساوي العداد`);
+  }
 });
 
 test('items:list returns all items without group filtering', () => {
@@ -225,4 +230,76 @@ test('items:import writes opening moves for imported quantities', () => {
   const m = db.prepare("SELECT * FROM stock_moves WHERE doc_type='opening' AND doc_id=?").get(it.id);
   assert.ok(m, 'يجب إنشاء حركة افتتاحية للصنف المستورد');
   assert.equal(m.qty_in_pieces, 300);
+});
+
+// ===== تعديل صنف له حركات: الكميات والوزن ينتشران لكل ما يرتبط بالصنف =====
+
+// ثبات: عداد كل سلة == صافي حركاتها (بكل المخازن)
+function netOf(db, itemId, bucket) {
+  return db.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n
+    FROM stock_moves WHERE item_id=? AND bucket=?`).get(itemId, bucket).n;
+}
+
+function seedMovedItem(db, h) {
+  db.prepare("INSERT INTO warehouses (id, name) VALUES (1, 'المخزن الرئيسي')").run();
+  const { id } = h['items:save'](null, {
+    code: '201', name: 'عبوة اختبار', unit_name: 'حبة', weight_grams: 10, qty_salem: 1000,
+  }, 1);
+  // شراء +500 ثم صرف -200 (صافي 300) مع تحديث العداد يدوياً كالمعالجات الحقيقية
+  db.prepare(`INSERT INTO stock_moves (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
+    qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, bucket) VALUES
+    ('purchase', 1, 'P1', '2026-10-23', ?, 1, 500, 0, 5, 0, 'salem'),
+    ('issue', 1, 'I1', '2026-10-23', ?, 1, 0, 200, 0, 2, 'salem')`).run(id, id);
+  db.prepare('UPDATE items SET qty_salem = 1300 WHERE id=?').run(id);
+  return id;
+}
+
+test('items:save على صنف له حركات: تعديل الكمية يستوعب الفرق في الافتتاح ويبقى العداد مطابقاً', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  const id = seedMovedItem(db, h);
+  // رفع السليم 1300 → 1500: الفرق +200 يُضاف للافتتاح (1000 + 200 = 1200)
+  h['items:save'](null, {
+    id, code: '201', name: 'عبوة اختبار', unit_name: 'حبة', weight_grams: 10, qty_salem: 1500,
+  }, 1);
+  assert.equal(db.prepare('SELECT qty_salem FROM items WHERE id=?').get(id).qty_salem, 1500);
+  assert.equal(netOf(db, id, 'salem'), 1500, 'العداد يطابق صافي الحركات بعد التعديل');
+  const op = db.prepare(`SELECT qty_in_pieces q FROM stock_moves
+    WHERE doc_type='opening' AND item_id=? AND bucket='salem'`).get(id).q;
+  assert.equal(op, 1200, 'الفرق يُستوعب في الحركة الافتتاحية');
+  // خفض إلى 1400: الافتتاح ينقص إلى 1100
+  h['items:save'](null, {
+    id, code: '201', name: 'عبوة اختبار', unit_name: 'حبة', weight_grams: 10, qty_salem: 1400,
+  }, 1);
+  assert.equal(netOf(db, id, 'salem'), 1400);
+  assert.equal(db.prepare(`SELECT qty_in_pieces q FROM stock_moves
+    WHERE doc_type='opening' AND item_id=? AND bucket='salem'`).get(id).q, 1100);
+});
+
+test('items:save يرفض رصيداً أقل من صافي حركات السلة برسالة واضحة', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  const id = seedMovedItem(db, h);
+  assert.throws(() => h['items:save'](null, {
+    id, code: '201', name: 'عبوة اختبار', unit_name: 'حبة', weight_grams: 10, qty_salem: 100,
+  }, 1), /أقل من صافي حركات/);
+  // القاعدة لم تتغير بعد الرفض
+  assert.equal(db.prepare('SELECT qty_salem FROM items WHERE id=?').get(id).qty_salem, 1300);
+});
+
+test('items:save: تغيير وزن الحبة يعيد حساب أوزان كل حركات الصنف', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  const id = seedMovedItem(db, h);
+  // الوزن 10 → 20 جم: كل الحركات تُعاد أوزانها = الحبات × 20 / 1000
+  h['items:save'](null, {
+    id, code: '201', name: 'عبوة اختبار', unit_name: 'حبة', weight_grams: 20, qty_salem: 1300,
+  }, 1);
+  const p1 = db.prepare(`SELECT weight_in_kg w FROM stock_moves WHERE doc_number='P1'`).get().w;
+  const i1 = db.prepare(`SELECT weight_out_kg w FROM stock_moves WHERE doc_number='I1'`).get().w;
+  const op = db.prepare(`SELECT weight_in_kg w FROM stock_moves
+    WHERE doc_type='opening' AND item_id=?`).get(id).w;
+  assert.ok(Math.abs(p1 - 500 * 20 / 1000) < 1e-9, 'وزن الشراء مُعاد حسابه');
+  assert.ok(Math.abs(i1 - 200 * 20 / 1000) < 1e-9, 'وزن الصرف مُعاد حسابه');
+  assert.ok(Math.abs(op - 1000 * 20 / 1000) < 1e-9, 'وزن الافتتاح مُعاد حسابه');
 });
