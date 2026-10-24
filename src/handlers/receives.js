@@ -1,7 +1,7 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, applySalemDelta } = require('../stock');
+const { writeMoves, voidDoc, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
 module.exports = function register(ipcMain) {
@@ -70,23 +70,24 @@ module.exports = function register(ipcMain) {
       }
       const moves = [];
       const insItem = db.prepare(`INSERT INTO receive_items
-        (receive_permit_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, notes)
-        VALUES (?,?,?,?,?,?,?,?)`);
+        (receive_permit_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, notes, bucket)
+        VALUES (?,?,?,?,?,?,?,?,?)`);
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
         const pieces = toPieces(it.quantity, it.unit, item);
         if (pieces <= 0) throw new Error(`كمية غير صالحة للصنف ${item.code}`);
+        const bucket = ['salem', 'talef', 'muharraz'].includes(it.bucket) ? it.bucket : 'salem';
         const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         if (doc.source === 'own') {
-          moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket: 'salem', notes: it.notes });
+          moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_in_pieces: pieces, weight_in_kg: kg, bucket, notes: it.notes });
         }
-        insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, it.notes || null);
+        insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg, it.notes || null, bucket);
       }
       writeMoves(db, 'receive', id, number, doc.doc_date, moves, userId);
-      // استلام إنتاج المصنع يزيد السليم (وعكس القديم عند التعديل — وخام العميل بلا أثر مخزني)
-      if (oldItems.length && before.source === 'own') applySalemDelta(db, oldItems, -1);
-      applySalemDelta(db, moves, 1);
+      // استلام إنتاج المصنع يزيد سلة كل بند (وعكس القديم عند التعديل — وخام العميل بلا أثر مخزني)
+      if (oldItems.length && before.source === 'own') applyBucketsDelta(db, oldItems, -1);
+      applyBucketsDelta(db, moves, 1);
     });
     audit(db, userId, isNew ? 'create' : 'update', 'receive_permit', id, before, doc);
     return { id };
@@ -99,7 +100,7 @@ module.exports = function register(ipcMain) {
     const oldItems = db.prepare('SELECT * FROM receive_items WHERE receive_permit_id=?').all(id);
     withTransaction(db, () => {
       voidDoc(db, 'receive', id, userId);
-      if (before.source === 'own') applySalemDelta(db, oldItems, -1);
+      if (before.source === 'own') applyBucketsDelta(db, oldItems, -1);
       db.prepare(`UPDATE receive_permits SET status='void' WHERE id=?`).run(id);
     });
     audit(db, userId, 'void', 'receive_permit', id, before, null);
