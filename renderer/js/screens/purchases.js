@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo} from '../ui.js';
+import { toast, confirmDialog, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo, bucketOptions, bucketBadge} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -50,8 +50,9 @@ register('purchases', {
         openModal(`فاتورة شراء ${esc(doc.doc_number)}`, `
           <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>المورد:</b> ${esc(doc.party_name || '—')}
             &nbsp; <b>طريقة الدفع:</b> ${doc.payment_method === 'cash' ? 'نقدي' : 'آجل'}</p>
-          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th><th>السعر</th><th>الإجمالي</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
+            <td>${bucketBadge(it.bucket)}</td>
             <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td><td>${fmtNum(it.weight_kg)}</td>
             <td>${it.unit_price != null ? fmtMoney(it.unit_price) : '—'}</td><td>${it.total_price != null ? fmtMoney(it.total_price) : '—'}</td></tr>`).join('')}</tbody></table>
           ${doc.items.length ? `<p style="margin-top:8px"><b>الإجمالي العام:</b> ${fmtMoney(doc.items.reduce((a, it) => a + (Number(it.total_price) || 0), 0))}</p>` : ''}
@@ -123,13 +124,13 @@ register('purchases', {
         </div>
         <table class="doc-lines">
           <thead><tr>
-            <th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الوحدة</th><th>الحبات / الوزن</th>
+            <th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الوحدة</th><th>الحبات / الوزن</th>
             <th>سعر الوحدة</th><th>الإجمالي</th><th>ملاحظات</th><th>بادئة الكراتين</th><th></th>
           </tr></thead>
           <tbody id="irows"></tbody>
           <tfoot><tr>
-            <td colspan="6"><b>الإجمالي العام</b></td>
-            <td id="f-total">0</td><td colspan="3"></td>
+            <td colspan="7"><b>الإجمالي العام</b></td>
+            <td id="f-total">0</td><td colspan="4"></td>
           </tr></tfoot>
         </table>
         <button class="btn small" id="add-row" type="button">+ إضافة بند</button>`,
@@ -142,6 +143,7 @@ register('purchases', {
               unit: r.querySelector('.p-unit').value,
               unit_price: parseFloat(r.querySelector('.p-price').value) || null,
               notes: r.querySelector('.p-notes').value,
+              bucket: r.querySelector('.p-bucket').value,
               carton_prefix: r.querySelector('.p-prefix') ? r.querySelector('.p-prefix').value : '',
             })).filter(x => x.item_id);
             await api.invoke('purchases:save', {
@@ -176,6 +178,7 @@ register('purchases', {
         row.innerHTML = `
           <td class="p-item-td"></td>
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
+          <td><select class="p-bucket">${bucketOptions(data.bucket || 'salem')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
           <td><span class="p-calc muted"></span></td>
@@ -232,7 +235,7 @@ register('purchases', {
         for (const it of doc.items) {
           addRow({
             item_id: it.item_id, warehouse_id: it.warehouse_id,
-            quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, notes: it.notes,
+            quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, notes: it.notes, bucket: it.bucket,
             carton_prefix: doc.cartons.length ? (doc.cartons[0].carton_number.match(/^\D*/) || [''])[0] : '',
           });
         }

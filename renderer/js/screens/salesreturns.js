@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, esc, renderTable, attachRowMenu, openModal, implicationsDialog } from '../ui.js';
+import { toast, esc, renderTable, attachRowMenu, openModal, implicationsDialog, bucketOptions, bucketBadge } from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -56,8 +56,9 @@ register('salesreturns', {
         openModal(`مرتجع ${esc(doc.doc_number)}`, `
           <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>الفاتورة:</b> <span dir="ltr">${esc(doc.invoice_number || '—')}</span>
             &nbsp; <b>العميل:</b> ${esc(doc.party_name || '—')} &nbsp; <b>طريقة الدفع:</b> ${doc.payment_method === 'cash' ? 'نقدي' : 'آجل'}</p>
-          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الحبات</th><th>السعر</th><th>الإجمالي</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
+            <td>${bucketBadge(it.bucket)}</td>
             <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td>
             <td>${fmtMoney(it.unit_price)}</td>
             <td>${fmtMoney(it.total_price)}</td></tr>`).join('')}</tbody></table>
@@ -156,11 +157,11 @@ register('salesreturns', {
         <div id="avail-wrap" class="notes" style="display:none"></div>
         <table class="doc-lines">
           <thead><tr>
-            <th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الوحدة</th><th>المتبقي</th><th>السعر (اختياري)</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
+            <th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الوحدة</th><th>المتبقي</th><th>السعر (اختياري)</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
           </tr></thead>
           <tbody id="irows"></tbody>
           <tfoot><tr>
-            <td colspan="6"><b>الإجمالي العام</b></td>
+            <td colspan="7"><b>الإجمالي العام</b></td>
             <td id="f-total">0</td><td colspan="2"></td>
           </tr></tfoot>
         </table>
@@ -174,6 +175,7 @@ register('salesreturns', {
               unit: r.querySelector('.p-unit').value,
               unit_price: parseFloat(r.querySelector('.p-price').value) || 0,
               notes: r.querySelector('.p-notes').value,
+              bucket: r.querySelector('.p-bucket').value,
             })).filter(x => x.item_id);
             const invoiceId = Number(b.querySelector('.p-invoice').value);
             if (!invoiceId) { toast('اختر الفاتورة الأصلية', 'err'); return; }
@@ -251,10 +253,12 @@ register('salesreturns', {
         const open = avail.filter(a => a.remain > 0);
         const row = document.createElement('tr');
         row.className = 'irow';
+        row._bucketTouched = false;
         row.innerHTML = `
           <td><select class="r-item"><option value="">— اختر صنفاً —</option>
             ${open.map(a => `<option value="${a.item_id}">${esc(a.code)} — ${esc(a.name)}</option>`).join('')}</select></td>
           <td><input type="hidden" class="r-wh"><span class="wh-text muted">—</span></td>
+          <td><select class="p-bucket">${bucketOptions(data.bucket || 'salem')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
           <td><span class="rem-text muted">—</span></td>
@@ -264,6 +268,7 @@ register('salesreturns', {
           <td class="del"><button class="btn mini danger p-del" type="button">×</button></td>`;
         rowsWrap.appendChild(row);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
+        row.querySelector('.p-bucket').addEventListener('change', () => { row._bucketTouched = true; });
 
         const itemSel = row.querySelector('.r-item');
         const whHidden = row.querySelector('.r-wh');
@@ -277,6 +282,7 @@ register('salesreturns', {
         function refresh() {
           const a = itemOf(itemSel.value);
           if (!a) return;
+          if (!row._bucketTouched && a.bucket) row.querySelector('.p-bucket').value = a.bucket;
           const cur = unitSel.value;
           const opts = unitOptionsFor(a);
           unitSel.innerHTML = opts.map(o => `<option value="${o.value}">${esc(o.label)}</option>`).join('');
@@ -323,7 +329,7 @@ register('salesreturns', {
       addBtn.onclick = () => addRow();
       if (doc && doc.items && doc.items.length) {
         for (const it of doc.items) {
-          addRow({ item_id: it.item_id, quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, notes: it.notes });
+          addRow({ item_id: it.item_id, quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, notes: it.notes, bucket: it.bucket });
         }
       }
       updateTotal();

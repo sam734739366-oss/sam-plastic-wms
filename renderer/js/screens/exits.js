@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, openModal, esc , itemCombo} from '../ui.js';
+import { toast, implicationsDialog, renderTable, openModal, esc , itemCombo, bucketOptions, bucketBadge} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtNum, today } from '../fmt.js';
 
@@ -54,8 +54,9 @@ register('exits', {
           <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>المخزن:</b> ${esc(doc.warehouse_name)}
             &nbsp; <b>السائق:</b> ${esc(doc.driver_name)} &nbsp; <b>السيارة:</b> ${esc(doc.car_number || '—')}<br>
             <b>جهة التسليم:</b> ${esc(doc.destination || '—')}</p>
-          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
+          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
+            <td>${bucketBadge(it.bucket)}</td>
             <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td>
             <td>${fmtNum(it.weight_kg)}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
@@ -106,11 +107,11 @@ register('exits', {
         </div>
         <table class="doc-lines">
           <thead><tr>
-            <th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الوحدة</th><th>الرصيد</th><th>الحبات / الوزن</th><th>ملاحظات</th><th></th>
+            <th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الوحدة</th><th>الرصيد</th><th>الحبات / الوزن</th><th>ملاحظات</th><th></th>
           </tr></thead>
           <tbody id="irows"></tbody>
           <tfoot><tr>
-            <td colspan="5"><b>إجمالي الحبات الخارجة</b></td>
+            <td colspan="6"><b>إجمالي الحبات الخارجة</b></td>
             <td id="f-total">0</td><td colspan="2"></td>
           </tr></tfoot>
         </table>
@@ -123,6 +124,7 @@ register('exits', {
               quantity: parseFloat(r.querySelector('.p-qty').value) || 0,
               unit: r.querySelector('.p-unit').value,
               notes: r.querySelector('.p-notes').value,
+              bucket: r.querySelector('.p-bucket').value,
             })).filter(x => x.item_id);
             await api.invoke('exits:save', {
               id: doc ? doc.id : null,
@@ -158,6 +160,7 @@ register('exits', {
         row.innerHTML = `
           <td class="p-item-td"></td>
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
+          <td><select class="p-bucket">${bucketOptions(data.bucket || 'salem')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
           <td><span class="bal-text muted"></span></td>
@@ -192,7 +195,10 @@ register('exits', {
           balText.textContent = '…';
           try {
             const bal = await api.invoke('stock:balance', item.id, Number(whSel.value));
-            balText.textContent = `الرصيد: ${fmtNum(bal.balance_pieces, 0)} حبة`;
+            const b = row.querySelector('.p-bucket').value;
+            const av = bal['qty_' + b] || 0;
+            const bl = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' }[b];
+            balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} حبة`;
           } catch { balText.textContent = ''; }
           const pieces = toPieces(qty.value, unitSel.value, item);
           const kg = piecesToWeightKg(pieces || 0, item?.weight_grams || 0);
@@ -205,6 +211,7 @@ register('exits', {
         whSel.onchange = update;
         unitSel.onchange = update;
         qty.oninput = update;
+        row.querySelector('.p-bucket').onchange = update;
         if (data.item_id) combo.setValue(data.item_id);
         if (data.warehouse_id) whSel.value = String(data.warehouse_id);
         refresh();

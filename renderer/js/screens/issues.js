@@ -1,7 +1,7 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo} from '../ui.js';
-import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
+import { toast, confirmDialog, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo, bucketOptions, bucketBadge} from '../ui.js';
+import { unitOptionsFor, toPieces } from '../units.js';
 import { fmtNum, today } from '../fmt.js';
 
 register('issues', {
@@ -55,8 +55,9 @@ register('issues', {
             <b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>المصدر:</b> ${doc.source === 'customer' ? 'خام عميل' : 'خام المصنع'}
             ${doc.party_name ? `&nbsp; <b>العميل:</b> ${esc(doc.party_name)}` : ''}<br>
             <b>المكينة:</b> ${esc(doc.machine_name || '—')} &nbsp; <b>الوردية:</b> ${esc(doc.shift_name || '—')} &nbsp; <b>المستلم:</b> ${esc(doc.receiver_name || '—')}</p>
-          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th><th>الكراتين</th></tr></thead>
+          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th><th>الكراتين</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
+            <td>${bucketBadge(it.bucket)}</td>
             <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td><td>${fmtNum(it.weight_kg)}</td>
             <td>${it.carton_ids.map(c => `<span class="tag recycled">${esc(c)}</span>`).join(' ') || '—'}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
@@ -135,11 +136,11 @@ register('issues', {
         </div>
         <table class="doc-lines">
           <thead><tr>
-            <th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الوحدة</th><th>الرصيد / الكراتين</th><th>ملاحظات</th><th></th>
+            <th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الوحدة</th><th>الرصيد / الكراتين</th><th>ملاحظات</th><th></th>
           </tr></thead>
           <tbody id="irows"></tbody>
           <tfoot><tr>
-            <td colspan="4"><b>إجمالي الحبات المصروفة</b></td>
+            <td colspan="5"><b>إجمالي الحبات المصروفة</b></td>
             <td id="f-total">0</td><td colspan="2"></td>
           </tr></tfoot>
         </table>
@@ -153,6 +154,7 @@ register('issues', {
               unit: r.querySelector('.p-unit').value,
               carton_ids: r._cartons || [],
               notes: r.querySelector('.p-notes').value,
+              bucket: r.querySelector('.p-bucket').value,
             })).filter(x => x.item_id);
             await api.invoke('issues:save', {
               id: doc ? doc.id : null,
@@ -196,6 +198,7 @@ register('issues', {
         row.innerHTML = `
           <td class="p-item-td"></td>
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
+          <td><select class="p-bucket">${bucketOptions(data.bucket || 'salem')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
           <td><div class="p-bal"><span class="bal-text muted"></span><button class="btn mini pick-btn" type="button" hidden>اختيار كراتين</button><div class="carton-tags"></div></div></td>
@@ -244,8 +247,10 @@ register('issues', {
             balText.textContent = '…';
             try {
               const bal = await api.invoke('stock:balance', item.id, Number(whSel.value));
-              const kg = piecesToWeightKg(bal.balance_pieces, item.weight_grams);
-              balText.textContent = `الرصيد: ${fmtNum(bal.balance_pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`;
+              const b = row.querySelector('.p-bucket').value;
+              const av = bal['qty_' + b] || 0;
+              const bl = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' }[b];
+              balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} حبة`;
             } catch { balText.textContent = ''; }
           }
           updateTotal();
@@ -271,6 +276,7 @@ register('issues', {
         whSel.onchange = refreshRow;
         unitSel.onchange = refreshRow;
         qty.oninput = updateTotal;
+        row.querySelector('.p-bucket').onchange = refreshRow;
         row._refresh = refreshRow;
         if (data.item_id) combo.setValue(data.item_id);
         if (data.warehouse_id) whSel.value = String(data.warehouse_id);
@@ -281,7 +287,7 @@ register('issues', {
         for (const it of doc.items) {
           addRow({
             item_id: it.item_id, warehouse_id: it.warehouse_id,
-            quantity: it.quantity, unit: it.unit, notes: it.notes, carton_ids: it.carton_ids,
+            quantity: it.quantity, unit: it.unit, notes: it.notes, carton_ids: it.carton_ids, bucket: it.bucket,
           });
         }
       } else {

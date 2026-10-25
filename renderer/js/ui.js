@@ -62,6 +62,18 @@ export function renderTable(el, columns, rows) {
     <tbody>${rows.map((r, i) => `<tr data-ri="${i}">${columns.map(c => `<td>${c.render ? c.render(r) : esc(r[c.key] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
+// ===== خيارات وشارات السلات (سليم/تالف/محرز) =====
+export function bucketOptions(selected) {
+  const opts = [['salem', 'سليم'], ['talef', 'تالف'], ['muharraz', 'محرز']];
+  return opts.map(([v, l]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${l}</option>`).join('');
+}
+
+export function bucketBadge(bucket) {
+  const labels = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' };
+  const b = ['salem', 'talef', 'muharraz'].includes(bucket) ? bucket : 'salem';
+  return `<span class="tag ${b}">${labels[b]}</span>`;
+}
+
 // ===== قائمة كليك يمين لصفوف الجداول =====
 // نقرة يمنى واحدة على صف تفتح قائمة إجراءات (عرض/طباعة/تعديل/إلغاء/حذف)،
 // ونقرتان يمنيتان سريعتان على الصف نفسه تشغلان إجراء «الفتح» (عرض المستند).

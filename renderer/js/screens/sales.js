@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, openModal, esc, itemCombo } from '../ui.js';
+import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc, itemCombo, bucketOptions, bucketBadge } from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -29,18 +29,16 @@ register('sales', {
         { key: 'items_count', label: 'البنود' },
         { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
         { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغاة</span>' : '<span class="tag salem">نشطة</span>' },
-        {
-          key: 'actions', label: '',
-          render: (r) => `<button class="btn mini" data-view="${r.id}">عرض</button>
-            <button class="btn mini" data-print="${r.id}">طباعة</button>
-            <button class="btn mini" data-edit="${r.id}">تعديل</button>
-            <button class="btn mini danger" data-void="${r.id}">إلغاء</button>`,
-        },
       ], rows);
-      el.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view(Number(b.dataset.view)));
-      el.querySelectorAll('[data-print]').forEach(b => b.onclick = () => printDoc(Number(b.dataset.print)));
-      el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => edit(Number(b.dataset.edit)));
-      el.querySelectorAll('[data-void]').forEach(b => b.onclick = () => voidDoc(Number(b.dataset.void)));
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
+        const r = rows[ri];
+        return [
+          { label: 'عرض', open: true, onClick: () => view(r.id) },
+          { label: 'طباعة', onClick: () => printDoc(r.id) },
+          { label: 'تعديل', onClick: () => edit(r.id) },
+          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
+        ];
+      });
     }
 
     async function printDoc(id) {
@@ -57,8 +55,9 @@ register('sales', {
           <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp; <b>العميل:</b> ${esc(doc.party_name || '—')}
             &nbsp; <b>طريقة الدفع:</b> ${doc.payment_method === 'cash' ? 'نقدي' : 'آجل'}
             &nbsp; <b>السائق:</b> ${esc(doc.driver_name || '—')} &nbsp; <b>السيارة:</b> ${esc(doc.car_number || '—')}</p>
-          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الحبات</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+          <table class="data"><thead><tr><th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الحبات</th><th>السعر</th><th>الإجمالي</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td><td>${esc(it.warehouse_name)}</td>
+            <td>${bucketBadge(it.bucket)}</td>
             <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td>
             <td>${fmtMoney(it.unit_price)}</td>
             <td>${fmtMoney(it.total_price)}</td></tr>`).join('')}</tbody></table>
@@ -127,11 +126,11 @@ register('sales', {
         </div>
         <table class="doc-lines">
           <thead><tr>
-            <th>الصنف</th><th>المخزن</th><th>الكمية</th><th>الوحدة</th><th>الرصيد</th><th>السعر</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
+            <th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الوحدة</th><th>الرصيد</th><th>السعر</th><th>الإجمالي</th><th>ملاحظات</th><th></th>
           </tr></thead>
           <tbody id="irows"></tbody>
           <tfoot><tr>
-            <td colspan="6"><b>الإجمالي العام</b></td>
+            <td colspan="7"><b>الإجمالي العام</b></td>
             <td id="f-total">0</td><td colspan="2"></td>
           </tr></tfoot>
         </table>
@@ -145,6 +144,7 @@ register('sales', {
               unit: r.querySelector('.p-unit').value,
               unit_price: parseFloat(r.querySelector('.p-price').value) || 0,
               notes: r.querySelector('.p-notes').value,
+              bucket: r.querySelector('.p-bucket').value,
             })).filter(x => x.item_id);
             await api.invoke('sales:save', {
               id: doc ? doc.id : null,
@@ -179,9 +179,11 @@ register('sales', {
       function addRow(data = {}) {
         const row = document.createElement('tr');
         row.className = 'irow';
+        row._bucketTouched = false;
         row.innerHTML = `
           <td class="p-item-td"></td>
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
+          <td><select class="p-bucket">${bucketOptions(data.bucket || 'salem')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
           <td><span class="bal-text muted"></span></td>
@@ -193,6 +195,7 @@ register('sales', {
         const combo = itemCombo(items, () => row.querySelector('.p-item').dispatchEvent(new Event('change')));
         row.querySelector('.p-item-td').appendChild(combo.box);
         row.querySelector('.p-del').onclick = () => { row.remove(); updateTotal(); };
+        row.querySelector('.p-bucket').addEventListener('change', () => { row._bucketTouched = true; update(); });
 
         const itemSel = row.querySelector('.p-item');
         const whSel = row.querySelector('.p-wh');
@@ -219,7 +222,10 @@ register('sales', {
             balText.textContent = '…';
             try {
               const bal = await api.invoke('stock:balance', item.id, Number(whSel.value));
-              balText.textContent = `الرصيد: ${fmtNum(bal.balance_pieces, 0)} حبة`;
+              const b = row.querySelector('.p-bucket').value;
+              const av = bal['qty_' + b] || 0;
+              const bl = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' }[b];
+              balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} حبة`;
             } catch { balText.textContent = ''; }
           } else {
             balText.textContent = '';
@@ -244,10 +250,14 @@ register('sales', {
       }
 
       back.querySelector('#f-type').onchange = () =>
-        rowsWrap.querySelectorAll('.irow').forEach(r => r._refresh && r._refresh());
+        rowsWrap.querySelectorAll('.irow').forEach(r => {
+          if (!r._bucketTouched) r.querySelector('.p-bucket').value =
+            back.querySelector('#f-type').value === 'scrap' ? 'talef' : 'salem';
+          r._refresh && r._refresh();
+        });
       if (doc && doc.items.length) {
         for (const it of doc.items) {
-          addRow({ item_id: it.item_id, warehouse_id: it.warehouse_id, quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, notes: it.notes });
+          addRow({ item_id: it.item_id, warehouse_id: it.warehouse_id, quantity: it.quantity, unit: it.unit, unit_price: it.unit_price, notes: it.notes, bucket: it.bucket });
         }
       } else {
         addRow();

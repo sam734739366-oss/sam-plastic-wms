@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo} from '../ui.js';
+import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo, bucketOptions, bucketBadge} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtNum, today } from '../fmt.js';
 
@@ -50,8 +50,9 @@ register('transfers', {
         openModal(`سند نقل ${esc(doc.doc_number)}`, `
           <p style="line-height:2"><b>التاريخ:</b> ${esc(doc.doc_date)} &nbsp;
             <b>من:</b> ${esc(doc.from_name)} &nbsp; <b>إلى:</b> ${esc(doc.to_name)}</p>
-          <table class="data"><thead><tr><th>الصنف</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
+          <table class="data"><thead><tr><th>الصنف</th><th>السلة</th><th>الكمية</th><th>الحبات</th><th>الوزن كجم</th></tr></thead>
           <tbody>${doc.items.map(it => `<tr><td>${esc(it.code)} — ${esc(it.name)}</td>
+            <td>${bucketBadge(it.bucket)}</td>
             <td>${fmtNum(it.quantity)} ${esc(it.unit)}</td><td>${fmtNum(it.pieces, 0)}</td>
             <td>${fmtNum(it.weight_kg)}</td></tr>`).join('')}</tbody></table>
           ${doc.notes ? `<p style="margin-top:8px"><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
@@ -101,11 +102,11 @@ register('transfers', {
         </div>
         <table class="doc-lines">
           <thead><tr>
-            <th>الصنف</th><th>الكمية</th><th>الوحدة</th><th>رصيد المصدر</th><th>الحبات / الوزن</th><th>ملاحظات</th><th></th>
+            <th>الصنف</th><th>السلة</th><th>الكمية</th><th>الوحدة</th><th>رصيد المصدر</th><th>الحبات / الوزن</th><th>ملاحظات</th><th></th>
           </tr></thead>
           <tbody id="irows"></tbody>
           <tfoot><tr>
-            <td colspan="4"><b>إجمالي الحبات المنقولة</b></td>
+            <td colspan="5"><b>إجمالي الحبات المنقولة</b></td>
             <td id="f-total">0</td><td colspan="2"></td>
           </tr></tfoot>
         </table>
@@ -117,6 +118,7 @@ register('transfers', {
               quantity: parseFloat(r.querySelector('.p-qty').value) || 0,
               unit: r.querySelector('.p-unit').value,
               notes: r.querySelector('.p-notes').value,
+              bucket: r.querySelector('.p-bucket').value,
             })).filter(x => x.item_id);
             await api.invoke('transfers:save', {
               id: doc ? doc.id : null,
@@ -150,6 +152,7 @@ register('transfers', {
         row.className = 'irow';
         row.innerHTML = `
           <td class="p-item-td"></td>
+          <td><select class="p-bucket">${bucketOptions(data.bucket || 'salem')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
           <td><select class="p-unit"></select></td>
           <td><span class="bal-text muted"></span></td>
@@ -183,7 +186,10 @@ register('transfers', {
           balText.textContent = '…';
           try {
             const bal = await api.invoke('stock:balance', item.id, fromWh());
-            balText.textContent = `الرصيد: ${fmtNum(bal.balance_pieces, 0)} حبة`;
+            const b = row.querySelector('.p-bucket').value;
+            const av = bal['qty_' + b] || 0;
+            const bl = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' }[b];
+            balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} حبة`;
           } catch { balText.textContent = ''; }
           const pieces = toPieces(qty.value, unitSel.value, item);
           const kg = piecesToWeightKg(pieces || 0, item?.weight_grams || 0);
@@ -195,6 +201,7 @@ register('transfers', {
         itemSel.onchange = refresh;
         unitSel.onchange = update;
         qty.oninput = update;
+        row.querySelector('.p-bucket').onchange = update;
         row._refresh = update;
         if (data.item_id) combo.setValue(data.item_id);
         refresh();
