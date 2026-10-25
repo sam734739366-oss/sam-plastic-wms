@@ -9,6 +9,13 @@ function num(n, d = 0) {
   return Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: d });
 }
 
+const BUCKET_LABEL = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' };
+function bucketCell(bucket) {
+  const b = BUCKET_LABEL[bucket] ? bucket : 'salem';
+  const color = { salem: '#15803d', talef: '#b91c1c', muharraz: '#b45309' }[b];
+  return `<b style="color:${color}">${BUCKET_LABEL[b]}</b>`;
+}
+
 function money(n, settings) {
   return fmtMoney(n, settings.currency);
 }
@@ -54,52 +61,52 @@ function meta(doc, extra = '') {
 
 function purchaseTemplate(doc, settings) {
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`,
-    fmt(r.quantity, 3), esc(r.unit), num(r.pieces), fmt(r.weight_kg, 2),
+    fmt(r.quantity, 3), esc(r.unit), bucketCell(r.bucket), num(r.pieces), fmt(r.weight_kg, 2),
     money(r.unit_price, settings), money(r.total_price, settings)]);
   const total = (doc.items || []).reduce((s, r) => s + (r.total_price || 0), 0);
-  rows.push(['', 'الإجمالي', '', '', '', '', '', `<b>${money(total, settings)}</b>`]);
+  rows.push(['', 'الإجمالي', '', '', '', '', '', '', `<b>${money(total, settings)}</b>`]);
   return docShell([settings.factory_name || 'سام بلاستيك', 'فاتورة شراء'],
-    meta(doc) + tableHtml(['#', 'الصنف', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم', 'السعر', 'الإجمالي'], rows)
+    meta(doc) + tableHtml(['#', 'الصنف', 'الكمية', 'الوحدة', 'السلة', 'الحبات', 'الوزن كجم', 'السعر', 'الإجمالي'], rows)
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
 function issueTemplate(doc, settings) {
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
-    fmt(r.quantity, 3), esc(r.unit), num(r.pieces), fmt(r.weight_kg, 2),
+    fmt(r.quantity, 3), esc(r.unit), bucketCell(r.bucket), num(r.pieces), fmt(r.weight_kg, 2),
     (r.carton_ids || []).map(esc).join(' ، ') || '—']);
   return docShell([settings.factory_name || 'سام بلاستيك', 'تصريح صرف للإنتاج'],
     meta(doc, `${doc.machine_name ? `<b>المكينة:</b> ${esc(doc.machine_name)} &nbsp;` : ''}${doc.shift_name ? `<b>الوردية:</b> ${esc(doc.shift_name)} &nbsp;` : ''}${doc.receiver_name ? `<b>المستلم:</b> ${esc(doc.receiver_name)} &nbsp;` : ''}`)
-    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم', 'الكراتين'], rows)
+    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السلة', 'الحبات', 'الوزن كجم', 'الكراتين'], rows)
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
 function receiveTemplate(doc, settings) {
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
-    fmt(r.quantity, 3), esc(r.unit), num(r.pieces), fmt(r.weight_kg, 2)]);
+    fmt(r.quantity, 3), esc(r.unit), bucketCell(r.bucket), num(r.pieces), fmt(r.weight_kg, 2)]);
   const issueInfo = doc.issue_number ? `<b>تصريح الصرف:</b> ${esc(doc.issue_number)} &nbsp;` : '';
   return docShell([settings.factory_name || 'سام بلاستيك', 'تصريح استلام إنتاج تام'],
     meta(doc, `${doc.machine_name ? `<b>المكينة:</b> ${esc(doc.machine_name)} &nbsp;` : ''}${doc.shift_name ? `<b>الوردية:</b> ${esc(doc.shift_name)} &nbsp;` : ''}${issueInfo}`)
-    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
+    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السلة', 'الحبات', 'الوزن كجم'], rows)
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
 function invoiceTemplate(doc, settings) {
   const typeLabel = { sale: 'بيع', scrap: 'خردة', blowing_fee: 'أجرة نفخ' }[doc.invoice_type] || doc.invoice_type;
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
-    fmt(r.quantity, 3), esc(r.unit), money(r.unit_price, settings), money(r.total_price, settings)]);
+    fmt(r.quantity, 3), esc(r.unit), bucketCell(r.bucket), money(r.unit_price, settings), money(r.total_price, settings)]);
   const total = (doc.items || []).reduce((s, r) => s + (r.total_price || 0), 0);
-  rows.push(['', 'الإجمالي', '', '', '', '', `<b>${money(total, settings)}</b>`]);
+  rows.push(['', 'الإجمالي', '', '', '', '', '', `<b>${money(total, settings)}</b>`]);
   return docShell([settings.factory_name || 'سام بلاستيك', `فاتورة ${typeLabel}`],
-    meta(doc) + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السعر', 'الإجمالي'], rows)
+    meta(doc) + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السلة', 'السعر', 'الإجمالي'], rows)
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
 function exitTemplate(doc, settings) {
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`,
-    fmt(r.quantity, 3), esc(r.unit), num(r.pieces), fmt(r.weight_kg, 2)]);
+    bucketCell(r.bucket), fmt(r.quantity, 3), esc(r.unit), num(r.pieces), fmt(r.weight_kg, 2)]);
   return docShell([settings.factory_name || 'سام بلاستيك', 'تصريح خروج'],
     meta(doc, `${doc.warehouse_name ? `<b>المخزن:</b> ${esc(doc.warehouse_name)} &nbsp;` : ''}${doc.destination ? `<b>جهة التسليم:</b> ${esc(doc.destination)} &nbsp;` : ''}`)
-    + tableHtml(['#', 'الصنف', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
+    + tableHtml(['#', 'الصنف', 'السلة', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
@@ -132,10 +139,10 @@ function scrapTemplate(doc, settings) {
 
 function transferTemplate(doc, settings) {
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`,
-    fmt(r.quantity, 3), esc(r.unit), num(r.pieces), fmt(r.weight_kg, 2)]);
+    bucketCell(r.bucket), fmt(r.quantity, 3), esc(r.unit), num(r.pieces), fmt(r.weight_kg, 2)]);
   return docShell([settings.factory_name || 'سام بلاستيك', 'سند نقل بين المخازن'],
     meta(doc, `<b>من:</b> ${esc(doc.from_name)} &nbsp; <b>إلى:</b> ${esc(doc.to_name)} &nbsp;`)
-    + tableHtml(['#', 'الصنف', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
+    + tableHtml(['#', 'الصنف', 'السلة', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
@@ -158,12 +165,12 @@ function productionTemplate(doc, settings) {
 function returnTemplate(doc, settings) {
   const isSale = doc.type !== 'purchase';
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
-    fmt(r.quantity, 3), esc(r.unit), money(r.unit_price, settings), money(r.total_price, settings)]);
+    fmt(r.quantity, 3), esc(r.unit), bucketCell(r.bucket), money(r.unit_price, settings), money(r.total_price, settings)]);
   const total = (doc.items || []).reduce((s, r) => s + (r.total_price || 0), 0);
-  rows.push(['', 'الإجمالي', '', '', '', '', `<b>${money(total, settings)}</b>`]);
+  rows.push(['', 'الإجمالي', '', '', '', '', '', `<b>${money(total, settings)}</b>`]);
   return docShell([settings.factory_name || 'سام بلاستيك', isSale ? 'مرتجع بيع' : 'مرتجع شراء'],
     meta(doc, `${isSale ? (doc.invoice_number ? `<b>فاتورة البيع:</b> ${esc(doc.invoice_number)} &nbsp;` : '') : (doc.purchase_number ? `<b>فاتورة الشراء:</b> ${esc(doc.purchase_number)} &nbsp;` : '')}`)
-    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السعر', 'الإجمالي'], rows)
+    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السلة', 'السعر', 'الإجمالي'], rows)
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
 }
 
