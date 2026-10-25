@@ -54,7 +54,7 @@ module.exports = function register(ipcMain) {
     const rows = db.prepare(`SELECT m.id, m.doc_type, m.doc_id, m.doc_number, m.doc_date, m.item_id,
         i.code, i.name, i.unit_name,
         i.weight_grams, i.pieces_per_carton, w.name warehouse_name,
-        m.qty_in_pieces, m.qty_out_pieces, m.weight_in_kg, m.weight_out_kg, m.notes
+        m.qty_in_pieces, m.qty_out_pieces, m.bucket, m.weight_in_kg, m.weight_out_kg, m.notes
       FROM stock_moves m
       JOIN items i ON i.id = m.item_id
       JOIN warehouses w ON w.id = m.warehouse_id${wh}

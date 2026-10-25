@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api } from '../api.js';
-import { toast, esc, openModal, attachRowMenu } from '../ui.js';
+import { toast, esc, openModal, attachRowMenu, bucketBadge } from '../ui.js';
 import { fmtMoney } from '../fmt.js';
 
 const N = (n, d = 0) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: d });
@@ -77,6 +77,7 @@ register('reports', {
           { key: 'doc_number', label: 'الرقم', cell: r => r.doc_number },
           { key: 'item', label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
           { key: 'warehouse_name', label: 'المخزن', cell: r => r.warehouse_name },
+          { key: 'bucket', label: 'السلة', cell: r => bucketBadge(r.bucket) },
           { key: 'qty_in_pieces', label: 'داخل (حبة)', cell: r => N(r.qty_in_pieces) },
           { key: 'qty_out_pieces', label: 'خارج (حبة)', cell: r => N(r.qty_out_pieces) },
           { key: 'balance_label', label: 'الرصيد', cell: r => r.balance_label },
