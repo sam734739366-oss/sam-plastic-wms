@@ -179,7 +179,8 @@ register('items', {
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = filtered[ri];
         return [
-          { label: 'تعديل', open: true, onClick: () => edit(r, () => refresh()) },
+          { label: 'عرض', open: true, onClick: () => view(r) },
+          { label: 'تعديل', onClick: () => edit(r, () => refresh()) },
           { label: 'حذف', danger: true, onClick: async () => {
             if (!(await confirmDialog(`حذف الصنف «${esc(r.name)}»؟`))) return;
             try {
@@ -204,6 +205,23 @@ register('items', {
 
     function whOptions(selectedId) {
       return warehouses.map(w => `<option value="${w.id}" ${String(w.id) === String(selectedId) ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
+    }
+
+    function view(row) {
+      openModal(`عرض صنف ${esc(row.code)}`, `
+        <div class="form-grid">
+          <div class="field"><label>كود الصنف</label><span class="muted">${esc(row.code)}</span></div>
+          <div class="field"><label>الاسم</label><span class="muted">${esc(row.name)}</span></div>
+          <div class="field"><label>الوحدة</label><span class="muted">${esc(row.unit_name)}</span></div>
+          <div class="field"><label>النوع</label><span class="muted">${row.is_complement ? 'صنف مكمل' : 'صنف أساسي'}</span></div>
+          <div class="field"><label>وزن الوحدة</label><span class="muted">${row.weight_grams ? fmt(row.weight_grams) + ' جم' : '—'}</span></div>
+          <div class="field"><label>التعبئة</label><span class="muted">${packCell(row)}</span></div>
+          <div class="field"><label>سليم</label>${qtyCell(row, 'qty_salem', 'salem', 'سليم')}</div>
+          <div class="field"><label>تالف</label>${qtyCell(row, 'qty_talef', 'talef', 'تالف')}</div>
+          <div class="field"><label>محرز</label>${qtyCell(row, 'qty_muharraz', 'muharraz', 'محرز')}</div>
+          <div class="field full"><label>ملاحظات</label><span class="muted">${esc(row.notes || '—')}</span></div>
+        </div>`,
+        [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
     }
 
     function edit(row, onSaved) {

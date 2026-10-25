@@ -39,7 +39,8 @@ register('users', {
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = rows[ri];
         const items = [
-          { label: 'تعديل', open: true, onClick: () => edit(r, refresh) },
+          { label: 'عرض', open: true, onClick: () => view(r) },
+          { label: 'تعديل', onClick: () => edit(r, refresh) },
         ];
         if (r.username !== 'admin') {
           items.push({ label: 'حذف', danger: true, onClick: async () => {
@@ -60,6 +61,16 @@ register('users', {
     async function refresh() {
       rows = await api.invoke('users:list');
       renderTableData();
+    }
+
+    function view(row) {
+      openModal(`عرض مستخدم ${esc(row.username)}`, `
+        <div class="form-grid">
+          <div class="field"><label>اسم المستخدم</label><span class="muted" dir="ltr">${esc(row.username)}</span></div>
+          <div class="field"><label>الاسم الكامل</label><span class="muted">${esc(row.full_name)}</span></div>
+          <div class="field"><label>الدور</label><span class="tag ${ROLE_TAG[row.role] || 'muharraz'}">${ROLE_LABEL[row.role] || row.role}</span></div>
+        </div>`,
+        [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
     }
 
     function edit(row, onSaved) {

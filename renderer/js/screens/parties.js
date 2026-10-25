@@ -79,7 +79,8 @@ register('parties', {
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = filtered[ri];
         return [
-          { label: 'تعديل', open: true, onClick: () => edit(r, refresh) },
+          { label: 'عرض', open: true, onClick: () => view(r) },
+          { label: 'تعديل', onClick: () => edit(r, refresh) },
           { label: 'حذف', danger: true, onClick: async () => {
             if (!(await confirmDialog(`حذف الطرف «${esc(r.name)}»؟`))) return;
             try {
@@ -97,6 +98,18 @@ register('parties', {
     async function refresh() {
       rows = await api.invoke('parties:list', currentType || null);
       renderTableData();
+    }
+
+    function view(row) {
+      openModal(`عرض طرف ${esc(row.name)}`, `
+        <div class="form-grid">
+          <div class="field"><label>الاسم</label><span class="muted">${esc(row.name)}</span></div>
+          <div class="field"><label>النوع</label><span class="tag ${TYPE_TAG[row.type] || 'muharraz'}">${TYPE_NAMES[row.type] || row.type}</span></div>
+          <div class="field"><label>الهاتف</label><span class="muted" dir="ltr">${esc(row.phone || '—')}</span></div>
+          <div class="field full"><label>العنوان</label><span class="muted">${esc(row.address || '—')}</span></div>
+          <div class="field full"><label>ملاحظات</label><span class="muted">${esc(row.notes || '—')}</span></div>
+        </div>`,
+        [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
     }
 
     function edit(row, onSaved) {

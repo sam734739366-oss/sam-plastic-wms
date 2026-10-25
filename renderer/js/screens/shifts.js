@@ -26,7 +26,8 @@ register('shifts', {
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = rows[ri];
         return [
-          { label: 'تعديل', open: true, onClick: () => edit(r, refresh) },
+          { label: 'عرض', open: true, onClick: () => view(r) },
+          { label: 'تعديل', onClick: () => edit(r, refresh) },
           { label: 'حذف', danger: true, onClick: async () => {
             if (!(await confirmDialog(`حذف الوردية «${esc(r.name)}»؟`))) return;
             try {
@@ -44,6 +45,15 @@ register('shifts', {
     async function refresh() {
       rows = await api.invoke('shifts:list');
       renderTableData();
+    }
+
+    function view(row) {
+      openModal(`عرض وردية ${esc(row.name)}`, `
+        <div class="form-grid">
+          <div class="field full"><label>الاسم</label><span class="muted">${esc(row.name)}</span></div>
+          <div class="field full"><label>ملاحظات</label><span class="muted">${esc(row.notes || '—')}</span></div>
+        </div>`,
+        [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
     }
 
     function edit(row, onSaved) {

@@ -75,8 +75,8 @@ export function bucketBadge(bucket) {
 }
 
 // ===== قائمة كليك يمين لصفوف الجداول =====
-// نقرة يمنى واحدة على صف تفتح قائمة إجراءات (عرض/طباعة/تعديل/إلغاء/حذف)،
-// ونقرتان يمنيتان سريعتان على الصف نفسه تشغلان إجراء «الفتح» (عرض المستند).
+// كليك يسار مزدوج على صف يشغل إجراء «الفتح» (عرض المستند فقط دون أي حفظ)،
+// ونقرة يمنى واحدة تعرض قائمة الإجراءات (عرض/طباعة/تعديل/إلغاء/حذف).
 // attachRowMenu(عنصر_الجدول, (rowIndex) => [{ label, danger, open, onClick }])
 let ctxMenuEl = null;
 function closeCtxMenu() { if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; } }
@@ -95,24 +95,22 @@ export function attachRowMenu(tableWrapEl, actionOf) {
     tableWrapEl.__rowMenu.actionOf = actionOf;
     return;
   }
-  const state = { lastId: null, lastT: 0, actionOf };
+  const state = { actionOf };
   tableWrapEl.__rowMenu = state;
+  // كليك يسار مزدوج على الصف = إجراء «الفتح» (عرض فقط دون أي حفظ)
+  tableWrapEl.addEventListener('dblclick', (ev) => {
+    const tr = ev.target.closest('tr[data-ri]');
+    if (!tr) return;
+    const actions = state.actionOf(Number(tr.dataset.ri));
+    const open = Array.isArray(actions) && actions.find(a => a.open);
+    if (open) open.onClick();
+  });
   tableWrapEl.addEventListener('contextmenu', (ev) => {
     const tr = ev.target.closest('tr[data-ri]');
     if (!tr) return;
     ev.preventDefault();
-    const ri = Number(tr.dataset.ri);
-    const actions = state.actionOf(ri);
+    const actions = state.actionOf(Number(tr.dataset.ri));
     if (!Array.isArray(actions) || !actions.length) return;
-    const open = actions.find(a => a.open);
-    const now = Date.now();
-    if (state.lastId === ri && now - state.lastT < 500) {
-      state.lastId = null; state.lastT = 0;
-      closeCtxMenu();
-      if (open) open.onClick();
-      return;
-    }
-    state.lastId = ri; state.lastT = now;
     closeCtxMenu();
     const menu = document.createElement('div');
     menu.className = 'ctx-menu';

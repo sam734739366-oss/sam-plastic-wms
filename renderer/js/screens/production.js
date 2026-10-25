@@ -42,7 +42,8 @@ register('production', {
       attachRowMenu(el.querySelector('#pending-wrap'), (ri) => {
         const r = pending[ri];
         return [
-          { label: 'تسجيل النتيجة', open: true, onClick: () => resultForm(r.carton_id, false) },
+          { label: 'عرض الكرتون', open: true, onClick: () => viewCarton(r) },
+          { label: 'تسجيل النتيجة', onClick: () => resultForm(r.carton_id, false) },
         ];
       });
       if (!pending.length) {
@@ -68,7 +69,8 @@ register('production', {
       attachRowMenu(el.querySelector('#done-wrap'), (ri) => {
         const r = done[ri];
         return [
-          { label: 'تعديل', open: true, onClick: () => resultForm(r.carton_id, true) },
+          { label: 'عرض النتيجة', open: true, onClick: () => viewResult(r.carton_id) },
+          { label: 'تعديل', onClick: () => resultForm(r.carton_id, true) },
           { label: 'طباعة', onClick: async () => {
             try {
               const doc = await api.invoke('production:get', r.carton_id);
@@ -81,6 +83,28 @@ register('production', {
       if (!done.length) {
         el.querySelector('#done-wrap').innerHTML = '<p class="muted">لم تُسجل أي نتيجة بعد — سجّل نتيجة أول كرتون من قائمة الانتظار أعلاه.</p>';
       }
+    }
+
+    function viewCarton(r) {
+      openModal(`كرتون ${esc(r.carton_number)}`, `
+        <p style="line-height:2"><b>الصنف:</b> ${esc(r.item_code)} — ${esc(r.item_name)}<br>
+        <b>تصريح الصرف:</b> ${esc(r.issue_number || '—')} &nbsp; <b>تاريخ الصرف:</b> ${esc(r.issue_date || '—')}<br>
+        <b>المكينة:</b> ${esc(r.machine_name || '—')} &nbsp; <b>الوردية:</b> ${esc(r.shift_name || '—')}<br>
+        <b>الحبات:</b> ${fmtNum(r.pieces, 0)}</p>`,
+        [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
+    }
+
+    async function viewResult(cartonId) {
+      try {
+        const row = await api.invoke('production:get', cartonId);
+        const rest = row.pieces - ((row.good_pieces || 0) + (row.defect_before || 0) + (row.defect_after || 0));
+        openModal(`نتيجة كرتون ${esc(row.carton_number)}`, `
+          <p style="line-height:2"><b>الصنف:</b> ${esc(row.item_code)} — ${esc(row.item_name)} &nbsp; <b>التاريخ:</b> ${esc(row.result_date)}<br>
+          <b>سليم:</b> ${fmtNum(row.good_pieces, 0)} &nbsp; <b>تالف قبل:</b> ${fmtNum(row.defect_before, 0)} &nbsp; <b>تالف بعد:</b> ${fmtNum(row.defect_after, 0)} &nbsp;
+          <b>غير محسوب:</b> ${rest > 0 ? '+' : ''}${fmtNum(rest, 0)}<br>
+          <b>ملاحظات:</b> ${esc(row.notes || '—')}</p>`,
+          [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
+      } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
     async function delResult(cartonId) {

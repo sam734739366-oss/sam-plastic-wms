@@ -50,7 +50,8 @@ register('warehouses', {
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = rows[ri];
         return [
-          { label: 'تعديل', open: true, onClick: () => edit(r, refresh) },
+          { label: 'عرض', open: true, onClick: () => view(r) },
+          { label: 'تعديل', onClick: () => edit(r, refresh) },
           { label: 'حذف', danger: true, onClick: async () => {
             if (!(await confirmDialog(`حذف المخزن «${esc(r.name)}»؟`))) return;
             try {
@@ -68,6 +69,16 @@ register('warehouses', {
     async function refresh() {
       rows = await api.invoke('warehouses:list');
       renderTableData();
+    }
+
+    function view(row) {
+      openModal(`عرض مخزن ${esc(row.name)}`, `
+        <div class="form-grid">
+          <div class="field"><label>الاسم</label><span class="muted">${esc(row.name)}</span></div>
+          <div class="field"><label>الموقع</label><span class="muted">${esc(row.location || '—')}</span></div>
+          <div class="field full"><label>ملاحظات</label><span class="muted">${esc(row.notes || '—')}</span></div>
+        </div>`,
+        [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
     }
 
     function edit(row, onSaved) {
