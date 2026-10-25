@@ -44,6 +44,16 @@ function qtyCell(r, key, cls, label) {
 
 function collect(back) {
   const v = (id) => back.querySelector(`#${id}`)?.value ?? '';
+  const opening_split = [];
+  for (const tr of back.querySelectorAll('tr.s-row')) {
+    const whId = Number(tr.dataset.wh) || null;
+    opening_split.push({
+      warehouse_id: whId,
+      salem: num(tr.querySelector('.s-salem')?.value) || 0,
+      talef: num(tr.querySelector('.s-talef')?.value) || 0,
+      muharraz: num(tr.querySelector('.s-muharraz')?.value) || 0,
+    });
+  }
   return {
     id: back.dataset.editId ? Number(back.dataset.editId) : null,
     code: digitsOnly(v('f-code')),
@@ -53,13 +63,16 @@ function collect(back) {
     pieces_per_carton: num(v('f-carton')) || null,
     pieces_per_shadda: num(v('f-shadda')) || null,
     pieces_per_bag: num(v('f-bag')) || null,
-    qty_salem: num(v('f-salem')) || 0,
-    qty_talef: num(v('f-talef')) || 0,
-    qty_muharraz: num(v('f-muharraz')) || 0,
-    opening_warehouse_id: Number(v('f-opening-wh')) || null,
+    opening_split,
     is_complement: back.querySelector('#f-complement')?.checked ? 1 : 0,
     notes: v('f-notes').trim() || null,
   };
+}
+
+function sumInputs(back, sel) {
+  let t = 0;
+  for (const el of back.querySelectorAll(sel)) t += num(el?.value) || 0;
+  return t;
 }
 
 function updateConv(back) {
@@ -76,12 +89,19 @@ function updateConv(back) {
     const bag = num(back.querySelector('#f-bag')?.value);
     if (bag) lines.push(`وزن الكيس (${fmt(bag)} قطعة) ≈ <b>${((w * bag) / 1000).toFixed(2)}</b> كجم`);
   }
-  const total = (num(back.querySelector('#f-salem')?.value) || 0)
-    + (num(back.querySelector('#f-talef')?.value) || 0)
-    + (num(back.querySelector('#f-muharraz')?.value) || 0);
+  const totalSalem = sumInputs(back, '.s-salem');
+  const totalTalef = sumInputs(back, '.s-talef');
+  const totalMuharraz = sumInputs(back, '.s-muharraz');
+  const total = totalSalem + totalTalef + totalMuharraz;
   const unit = back.querySelector('#f-unit')?.value || 'حبة';
   lines.push(`إجمالي الكمية = <b>${fmt(total)}</b> ${esc(unit)}`);
   conv.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+  const totSalem = back.querySelector('#tot-salem');
+  const totTalef = back.querySelector('#tot-talef');
+  const totMuharraz = back.querySelector('#tot-muharraz');
+  if (totSalem) totSalem.textContent = fmt(totalSalem);
+  if (totTalef) totTalef.textContent = fmt(totalTalef);
+  if (totMuharraz) totMuharraz.textContent = fmt(totalMuharraz);
 }
 
 function parseCsv(text) {
@@ -208,6 +228,17 @@ register('items', {
     }
 
     function view(row) {
+      const split = row.opening_split || [];
+      const splitLines = split.length
+        ? split.map((s) => {
+          const name = warehouses.find(w => w.id === s.warehouse_id)?.name || `مخزن ${s.warehouse_id}`;
+          const parts = [];
+          if (s.salem) parts.push(`<span class="tag salem">سليم ${fmt(s.salem)}</span>`);
+          if (s.talef) parts.push(`<span class="tag talef">تالف ${fmt(s.talef)}</span>`);
+          if (s.muharraz) parts.push(`<span class="tag muharraz">محرز ${fmt(s.muharraz)}</span>`);
+          return `<div style="margin:3px 0">${esc(name)}: ${parts.join(' ') || '<span class="muted">—</span>'}</div>`;
+        }).join('')
+        : '<span class="muted">—</span>';
       openModal(`عرض صنف ${esc(row.code)}`, `
         <div class="form-grid">
           <div class="field"><label>كود الصنف</label><span class="muted">${esc(row.code)}</span></div>
@@ -219,6 +250,7 @@ register('items', {
           <div class="field"><label>سليم</label>${qtyCell(row, 'qty_salem', 'salem', 'سليم')}</div>
           <div class="field"><label>تالف</label>${qtyCell(row, 'qty_talef', 'talef', 'تالف')}</div>
           <div class="field"><label>محرز</label>${qtyCell(row, 'qty_muharraz', 'muharraz', 'محرز')}</div>
+          <div class="field full"><label>التوزيع على المخازن</label><div>${splitLines}</div></div>
           <div class="field full"><label>ملاحظات</label><span class="muted">${esc(row.notes || '—')}</span></div>
         </div>`,
         [{ label: 'إغلاق', onClick: (b) => b.remove() }]);
@@ -226,7 +258,22 @@ register('items', {
 
     function edit(row, onSaved) {
       const hasMoves = !!row?.has_moves;
-      const defaultWh = row?.opening_warehouse_id || warehouses[0]?.id || '';
+      const splitMap = Object.fromEntries((row?.opening_split || []).map(s => [s.warehouse_id, s]));
+      const splitRowsHtml = warehouses.length
+        ? `<table class="split-table">
+            <thead><tr><th>المخزن</th><th>سليم</th><th>تالف</th><th>محرز</th></tr></thead>
+            <tbody>${warehouses.map(w => {
+              const s = splitMap[w.id] || {};
+              return `<tr class="s-row" data-wh="${w.id}">
+                <td>${esc(w.name)}</td>
+                <td><input class="s-salem" inputmode="numeric" value="${s.salem ? String(s.salem) : ''}" placeholder="0"></td>
+                <td><input class="s-talef" inputmode="numeric" value="${s.talef ? String(s.talef) : ''}" placeholder="0"></td>
+                <td><input class="s-muharraz" inputmode="numeric" value="${s.muharraz ? String(s.muharraz) : ''}" placeholder="0"></td>
+              </tr>`;
+            }).join('')}</tbody>
+            <tfoot><tr><td>الإجمالي</td><td id="tot-salem">0</td><td id="tot-talef">0</td><td id="tot-muharraz">0</td></tr></tfoot>
+          </table>`
+        : '<p class="muted" style="margin:0">لا توجد مخازن — أنشئ مخزناً من شاشة المخازن قبل إدخال الأرصدة.</p>';
       const back = openModal(row ? 'تعديل صنف' : 'إضافة صنف', `
         <div class="form-grid">
           <div class="field"><label>كود الصنف * (أرقام فقط)</label><input id="f-code" inputmode="numeric" value="${esc(row?.code || '')}" placeholder="مثال: 101"></div>
@@ -234,34 +281,25 @@ register('items', {
           <div class="field"><label>الوحدة *</label>
             <select id="f-unit">${UNITS.map(u => `<option value="${esc(u)}" ${row?.unit_name === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>
           </div>
-          <div class="field"><label>مخزن الرصيد الافتتاحي *</label>
-            <select id="f-opening-wh">${whOptions(defaultWh)}</select>
-          </div>
           <div class="field"><label>وزن الوحدة (جرام)</label><input id="f-weight" inputmode="decimal" value="${esc(row?.weight_grams || '')}" placeholder="مثال: 5.02"></div>
           <div class="field"><label>عدد القطع في الكرتون (اختياري)</label><input id="f-carton" inputmode="numeric" value="${esc(row?.pieces_per_carton || '')}"></div>
           <div class="field"><label>عدد القطع في الشدة (اختياري)</label><input id="f-shadda" inputmode="numeric" value="${esc(row?.pieces_per_shadda || '')}"></div>
           <div class="field"><label>عدد القطع في الكيس (اختياري)</label><input id="f-bag" inputmode="numeric" value="${esc(row?.pieces_per_bag || '')}"></div>
-          <div class="field"><label>رصيد سليم الحالي</label><input id="f-salem" inputmode="numeric" value="${esc(row?.qty_salem || '')}"></div>
-          <div class="field"><label>رصيد تالف الحالي</label><input id="f-talef" inputmode="numeric" value="${esc(row?.qty_talef || '')}"></div>
-          <div class="field"><label>رصيد محرز الحالي</label><input id="f-muharraz" inputmode="numeric" value="${esc(row?.qty_muharraz || '')}"></div>
+          <div class="field full"><label>توزيع الرصيد الافتتاحي على المخازن</label>${splitRowsHtml}</div>
           <div class="field full"><label style="display:flex;align-items:center;gap:8px;margin:0;font-weight:600;cursor:pointer">
             <input type="checkbox" id="f-complement" ${row?.is_complement ? 'checked' : ''} style="width:auto;flex:none;accent-color:#2450c8">
             صنف مكمل — لا يظهر في جرد المخزون (مثل أغطية العبوات)</label></div>
           <div class="field full"><label>ملاحظات</label><input id="f-notes" value="${esc(row?.notes || '')}"></div>
         </div>
         ${hasMoves
-          ? '<p class="muted" style="margin:10px 0 0">لهذا الصنف حركات مخزون: تعديل الكميات يضبط الرصيد الافتتاحي تلقائياً في المخزن المختار ويظهر فوراً في كل التقارير والمخازن، ولا يُقبل رصيد أقل من صافي حركات السلة.</p>'
-          : '<p class="muted" style="margin:10px 0 0">الأرصدة الافتتاحية تُسجَّل كحركة مخزون في المخزن المختار وتظهر فوراً في الجرد والتقارير وتصبح قابلة للصرف والبيع.</p>'}
+          ? '<p class="muted" style="margin:10px 0 0">لهذا الصنف حركات مخزون: الجدول يعرض الرصيد الحالي في كل مخزن، وتعديله يعيد توزيع الرصيد الافتتاحي ليصبح رصيد كل مخزن كما أدخلته ويظهر فوراً في كل التقارير، ولا يُقبل رصيد أقل من صافي حركات المخزن.</p>'
+          : '<p class="muted" style="margin:10px 0 0">أدخل الرصيد الافتتاحي لكل مخزن في خاناته (جزء في مخزن وجزء في آخر)، واترك الخانات فارغة لصنف بلا كمية. الأرصدة تُسجَّل كحركات مخزون وتظهر فوراً في الجرد والتقارير وتصبح قابلة للصرف والبيع.</p>'}
         <div id="conv" style="margin-top:10px;color:#2450c8;font-size:13px;line-height:1.8"></div>
       `, [
         {
           label: 'حفظ', class: 'primary',
           onClick: async (b) => {
             try {
-              if (!Number(b.querySelector('#f-opening-wh')?.value)) {
-                toast('اختر مخزن الرصيد الافتتاحي', 'err');
-                return;
-              }
               await api.invoke('items:save', collect(b), currentUser().id);
               toast('تم حفظ الصنف', 'ok');
               b.remove();
@@ -283,8 +321,11 @@ register('items', {
       });
 
       back.querySelector('#f-unit').addEventListener('change', () => updateConv(back));
-      for (const id of ['f-weight', 'f-carton', 'f-shadda', 'f-bag', 'f-salem', 'f-talef', 'f-muharraz']) {
+      for (const id of ['f-weight', 'f-carton', 'f-shadda', 'f-bag']) {
         back.querySelector(`#${id}`)?.addEventListener('input', () => updateConv(back));
+      }
+      for (const el of back.querySelectorAll('.s-row input')) {
+        el.addEventListener('input', () => updateConv(back));
       }
       updateConv(back);
     }
