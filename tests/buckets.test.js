@@ -265,3 +265,27 @@ test('مرتجع بيع لبند خردة يزيد التالف ومرتجع ش�
   assert.equal(it.qty_salem, 25);
   assert.equal(it.qty_talef, 10);
 });
+
+test('فاتورة بيع (ترحيل) بسلة تالف محددة تُخصم التالف وتُحفظ السلة في البند', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc('warehouses', 'items', 'purchases', 'sales', 'reports');
+  h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
+  const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
+  const { id } = h['items:save'](null, {
+    code: '701', name: 'قنينة لتر', unit_name: 'حبة', qty_salem: 0, qty_talef: 0, qty_muharraz: 0,
+  }, 1);
+  // رصيد تالف 40 عبر شراء بسلة تالف
+  h['purchases:save'](null, {
+    doc_number: 'ش-10', doc_date: '2026-10-25',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 40, unit: 'حبة', unit_price: 1, bucket: 'talef' }],
+  }, 1);
+  // فاتورة بيع بسلة تالف محددة في البند
+  const { id: invId } = h['sales:save'](null, {
+    doc_number: 'INV-11', doc_date: '2026-10-25', invoice_type: 'sale', party_id: null,
+    items: [{ item_id: id, warehouse_id: wh, quantity: 10, unit: 'حبة', unit_price: 2, bucket: 'talef' }],
+  }, 1);
+  assert.equal(db.prepare('SELECT bucket FROM invoice_items WHERE invoice_id=?').get(invId).bucket, 'talef');
+  const it = db.prepare('SELECT * FROM items WHERE id=?').get(id);
+  assert.equal(it.qty_talef, 30);
+  assert.equal(it.qty_salem, 0);
+});
