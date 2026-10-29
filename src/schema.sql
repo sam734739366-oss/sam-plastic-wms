@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS items (
   pieces_per_carton INTEGER,
   pieces_per_shadda INTEGER,
   pieces_per_bag INTEGER,
+  -- صنف الأكياس الفارغة الذي يُستهلك لتعبئة هذا الصنف (خصم آلي عند استلام الإنتاج التام)
+  bag_item_id INTEGER REFERENCES items(id),
   qty_salem INTEGER NOT NULL DEFAULT 0,
   qty_talef INTEGER NOT NULL DEFAULT 0,
   qty_muharraz INTEGER NOT NULL DEFAULT 0,
@@ -102,7 +104,12 @@ CREATE TABLE IF NOT EXISTS cartons (
   status TEXT NOT NULL DEFAULT 'in_stock' CHECK (status IN ('in_stock','issued','finished')),
   issue_date TEXT,
   issue_permit_id INTEGER,
-  notes TEXT
+  notes TEXT,
+  -- الكرتون قد يكون من خام المصنع أو من خام عميل (النفخ للغير).
+  -- كراتين العميل بلا أي أثر على مخزون المصنع وسلاته، وتُخصم من رصيد العميل.
+  party_id INTEGER REFERENCES parties(id),
+  source TEXT NOT NULL DEFAULT 'own' CHECK (source IN ('own','customer')),
+  receipt_id INTEGER REFERENCES customer_raw_receipts(id)
 );
 
 CREATE TABLE IF NOT EXISTS issue_permits (
@@ -175,7 +182,13 @@ CREATE TABLE IF NOT EXISTS receive_items (
   pieces INTEGER NOT NULL,
   weight_kg REAL NOT NULL,
   notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem'
+  bucket TEXT NOT NULL DEFAULT 'salem',
+  -- أكياس الاستلام: quantity هو عدد الأكياس المكتملة، و breaks الحبات المفردة بعدها.
+  -- bags_used = المكتملة + كيس واحد إن وُجدت كسور. bag_item_id هو صنف الأكياس الذي خُصم
+  -- (null يعني بلا خصم: إما لأن المصدر خام عميل أو لأن الصنف غير مربوط بصنف أكياس).
+  breaks INTEGER NOT NULL DEFAULT 0,
+  bags_used INTEGER NOT NULL DEFAULT 0,
+  bag_item_id INTEGER REFERENCES items(id)
 );
 
 CREATE TABLE IF NOT EXISTS invoices (
@@ -286,7 +299,8 @@ CREATE TABLE IF NOT EXISTS scrap_movements (
   doc_number TEXT NOT NULL UNIQUE,
   doc_date TEXT NOT NULL,
   item_id INTEGER NOT NULL REFERENCES items(id),
-  disposition TEXT NOT NULL CHECK (disposition IN ('to_recycled','to_stock','to_supplier','sold_scrap')),
+  -- production_defect: تالف ناتج عن نتيجة إنتاج كرتون بخام عميل — سند يُدار آلياً
+  disposition TEXT NOT NULL CHECK (disposition IN ('to_recycled','to_stock','to_supplier','sold_scrap','production_defect')),
   warehouse_id INTEGER REFERENCES warehouses(id),
   party_id INTEGER REFERENCES parties(id),
   pieces INTEGER NOT NULL DEFAULT 0,
@@ -298,7 +312,9 @@ CREATE TABLE IF NOT EXISTS scrap_movements (
   notes TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+  -- لا يوجد doc_id في هذا الجدول (هو في stock_moves)، فربط سند التالف بالكرتون هنا
+  prod_carton_id INTEGER REFERENCES cartons(id)
 );
 
 -- مرتجعات البيع: إرجاع العميل بضاعة من فاتورة بيع (ترجع للمخزون وتخفض ذمة العميل)

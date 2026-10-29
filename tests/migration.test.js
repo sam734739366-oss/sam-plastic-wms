@@ -73,3 +73,37 @@ test('ترحيل قاعدة قديمة: أعمدة الدفع + ترحيل ال�
   assert.equal(ledger.partyBalance(d, 2), -5000);
   assert.equal(ledger.cashBalance(d), 0);
 });
+
+// ترقية قاعدة قديمة إلى كراتين خام العميل + سند تالف الإنتاج الآلي
+test('ترحيل قاعدة قديمة: أعمدة كراتين العميل وتوسيع قيد المصير بلا فقدان مستندات', () => {
+  const d = makeOldDb();
+  d.prepare("INSERT INTO cartons (carton_number, item_id, pieces) VALUES ('K-1', 1, 5000)").run();
+  // الأعمدة القديمة الناقصة (talef_take/created_by/created_at/...) هي ما يُسقط نسخ SELECT *
+  d.prepare("INSERT INTO scrap_movements (id, doc_number, doc_date, item_id, disposition, pieces, notes) VALUES (5,'S-5','2026-01-05',1,'sold_scrap',10,NULL)").run();
+  d.prepare("INSERT INTO scrap_movements (id, doc_number, doc_date, item_id, disposition, warehouse_id, party_id, pieces, notes) VALUES (9,'S-9','2026-01-09',1,'to_recycled',1,1,20,'ملاحظة')").run();
+  d.prepare("INSERT INTO stock_moves (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id, qty_out_pieces, bucket) VALUES ('scrap',9,'S-9','2026-01-09',1,1,20,'talef')").run();
+
+  // تنفيذ schema.sql على قاعدة قديمة: لا يجوز أن يفشل لأن الفهارس الجديدة على أعمدة غير موجودة بعد
+  d.exec(fs.readFileSync(path.join(__dirname, '..', 'src', 'schema.sql'), 'utf8'));
+  migrate(d);
+
+  const ccols = d.prepare('PRAGMA table_info(cartons)').all().map(c => c.name);
+  assert.ok(['party_id', 'source', 'receipt_id'].every(c => ccols.includes(c)), 'أعمدة الكراتين أضيفت');
+  assert.equal(d.prepare("SELECT source FROM cartons WHERE carton_number='K-1'").get().source, 'own', 'القديم كرتونة مصنع');
+  assert.throws(() => d.prepare("INSERT INTO cartons (carton_number, item_id, pieces, source) VALUES ('X',1,1,'bogus')").run(),
+    /CHECK/, 'قيد المصدر مُطبَّق بعد الترقية');
+
+  const rows = d.prepare('SELECT id, doc_number, disposition, pieces, notes, warehouse_id, party_id, prod_carton_id FROM scrap_movements ORDER BY id').all();
+  assert.deepEqual(rows.map(r => [r.id, r.doc_number, r.pieces, r.notes]),
+    [[5, 'S-5', 10, null], [9, 'S-9', 20, 'ملاحظة']], 'المعرّفات والأرقام والقطع والملاحظات كما كانت');
+  assert.equal(rows[1].warehouse_id, 1);
+  assert.equal(rows[1].party_id, 1);
+  assert.ok(rows.every(r => r.prod_carton_id === null));
+  assert.equal(d.prepare("SELECT COUNT(*) c FROM stock_moves sm JOIN scrap_movements s ON s.id = sm.doc_id WHERE sm.doc_type='scrap'").get().c,
+    1, 'إشارات حركات المخزون إلى سندات التالف لم تنقطع');
+
+  d.prepare("INSERT INTO scrap_movements (doc_number, doc_date, item_id, disposition, pieces) VALUES ('S-99','2026-02-01',1,'production_defect',3)").run();
+  assert.equal(d.prepare("SELECT id FROM scrap_movements WHERE doc_number='S-99'").get().id, 10, 'تسلسل المعرّفات يتابع بلا تكرار');
+  assert.throws(() => d.prepare("INSERT INTO scrap_movements (doc_number, doc_date, item_id, disposition, pieces) VALUES ('S-98','2026-02-01',1,'burnt',3)").run(),
+    /CHECK/, 'قيد المصير ما زال يرفض القيم غير المعروفة');
+});

@@ -23,6 +23,8 @@ function migrate(d) {
   add('qty_salem', 'qty_salem INTEGER NOT NULL DEFAULT 0');
   add('qty_talef', 'qty_talef INTEGER NOT NULL DEFAULT 0');
   add('qty_muharraz', 'qty_muharraz INTEGER NOT NULL DEFAULT 0');
+  // صنف الأكياس المرتبط بالصنف المُعبَّأ (يُخصم آلياً عند استلام الإنتاج التام)
+  if (!cols.includes('bag_item_id')) d.exec('ALTER TABLE items ADD COLUMN bag_item_id INTEGER REFERENCES items(id)');
   // مخزن الرصيد الافتتاحي: يُحدد المستخدم أي مخزن يحتضن حركات الافتتاح
   add('opening_warehouse_id', 'opening_warehouse_id INTEGER');
   if (!cols.includes('opening_warehouse_id')) {
@@ -36,12 +38,80 @@ function migrate(d) {
     d.exec('ALTER TABLE items ADD COLUMN is_complement INTEGER NOT NULL DEFAULT 0');
     d.exec("UPDATE items SET is_complement=1 WHERE unit_name='غطاء'");
   }
+  // كراتين خام العميل (النفخ للغير): الكرتون يحمل مالكه ومصدره وسند الاستلام الأصلي.
+  // الكراتين القديمة كلها من مشتريات المصنع، فالقيمة الافتراضية 'own' صحيحة لها.
+  const cartonCols = d.prepare('PRAGMA table_info(cartons)').all().map(c => c.name);
+  const cartonAdd = (name, sql) => { if (!cartonCols.includes(name)) d.exec(`ALTER TABLE cartons ADD COLUMN ${sql}`); };
+  cartonAdd('party_id', 'party_id INTEGER REFERENCES parties(id)');
+  cartonAdd('receipt_id', 'receipt_id INTEGER REFERENCES customer_raw_receipts(id)');
+  if (!cartonCols.includes('source')) {
+    d.exec(`ALTER TABLE cartons ADD COLUMN source TEXT NOT NULL DEFAULT 'own' CHECK (source IN ('own','customer'))`);
+  }
   // سندات التالف: تخزين توزيع الخصم (تالف/سليم) لعكس الأثر بدقة عند التعديل والإلغاء
   const scrapCols = d.prepare('PRAGMA table_info(scrap_movements)').all().map(c => c.name);
   const scrapAdd = (name, sql) => { if (!scrapCols.includes(name)) d.exec(`ALTER TABLE scrap_movements ADD COLUMN ${sql}`); };
   scrapAdd('talef_take', 'talef_take INTEGER NOT NULL DEFAULT 0');
   scrapAdd('salem_take', 'salem_take INTEGER NOT NULL DEFAULT 0');
   scrapAdd('is_customer', 'is_customer INTEGER NOT NULL DEFAULT 0');
+  // ربط سند التالف التلقائي بكرتون الإنتاج (لا يوجد doc_id في هذا الجدول)
+  scrapAdd('prod_carton_id', 'prod_carton_id INTEGER REFERENCES cartons(id)');
+  // توسيع قيد «مصير التالف» ليشمل تالف نتيجة الإنتاج بخام العميل.
+  // SQLite لا يعدّل قيود الأعمدة بعد الإنشاء، فتُعاد بناء الجدول مع الحفاظ على المعرّفات
+  // حتى لا تنقطع إشارات stock_moves (doc_type='scrap') ولا يتكرر تسلسل AUTOINCREMENT.
+  const scrapTbl = d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='scrap_movements'").get();
+  if (scrapTbl && !scrapTbl.sql.includes("'production_defect'")) {
+    d.exec('PRAGMA foreign_keys = OFF');
+    try {
+      d.exec('ALTER TABLE scrap_movements RENAME TO scrap_movements_old');
+      d.exec(`CREATE TABLE scrap_movements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_number TEXT NOT NULL UNIQUE,
+        doc_date TEXT NOT NULL,
+        item_id INTEGER NOT NULL REFERENCES items(id),
+        disposition TEXT NOT NULL CHECK (disposition IN ('to_recycled','to_stock','to_supplier','sold_scrap','production_defect')),
+        warehouse_id INTEGER REFERENCES warehouses(id),
+        party_id INTEGER REFERENCES parties(id),
+        pieces INTEGER NOT NULL DEFAULT 0,
+        weight_kg REAL NOT NULL DEFAULT 0,
+        price REAL,
+        talef_take INTEGER NOT NULL DEFAULT 0,
+        salem_take INTEGER NOT NULL DEFAULT 0,
+        is_customer INTEGER NOT NULL DEFAULT 0,
+        notes TEXT,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+        created_by INTEGER REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        prod_carton_id INTEGER REFERENCES cartons(id)
+      )`);
+      // قائمة الأعمدة صراحةً: SELECT * يفشل لأن الجدول الجديد عمود أكثر من القديم،
+      // والقواعد الأقدم قد تفتقد أعمدة أُضيفت لاحقاً (created_at/is_customer/...) فتُستكمل بالافتراضي.
+      const oldScrapCols = d.prepare('PRAGMA table_info(scrap_movements_old)').all().map(c => c.name);
+      const has = (c) => oldScrapCols.includes(c);
+      // عمود nullable قديم → قيمة افتراضية عند الغياب
+      const val = (col, def) => (has(col) ? col : `${def} AS ${col}`);
+      // الجدول الجديد يفرض NOT NULL على أعمدة كانت مسموحة بالـ NULL في القواعد القديمة،
+      // فصفوف البيانات الحقيقية بقيم NULL تُستكمل بالافتراضي وإلا أجهض الترقية كلها
+      const nn = (col, def) => (has(col) ? `COALESCE(${col}, ${def}) AS ${col}` : `${def} AS ${col}`);
+      d.exec(`INSERT INTO scrap_movements (id, doc_number, doc_date, item_id, disposition, warehouse_id,
+          party_id, pieces, weight_kg, price, talef_take, salem_take, is_customer, notes, status,
+          created_by, created_at, prod_carton_id)
+        SELECT id, doc_number, doc_date, item_id, disposition, ${val('warehouse_id', 'NULL')},
+          ${val('party_id', 'NULL')}, ${nn('pieces', '0')}, ${nn('weight_kg', '0')}, ${val('price', 'NULL')},
+          ${nn('talef_take', '0')}, ${nn('salem_take', '0')}, ${nn('is_customer', '0')},
+          ${val('notes', 'NULL')}, ${nn('status', "'active'")},
+          ${val('created_by', 'NULL')}, ${nn('created_at', "datetime('now','localtime')")},
+          ${val('prod_carton_id', 'NULL')}
+        FROM scrap_movements_old`);
+      d.exec('DROP TABLE scrap_movements_old');
+    } finally {
+      d.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+  // الفهارس بعد الأعمدة: schema.sql يُنفَّذ قبل migrate()، فأي فهرس على عمود جديد
+  // في schema.sql يُسقط التشغيل على قاعدة قديمة لأن العمود لم يُضَف بعد.
+  d.exec('CREATE INDEX IF NOT EXISTS idx_cartons_source ON cartons(source, party_id, status)');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_cartons_receipt ON cartons(receipt_id)');
+  d.exec('CREATE INDEX IF NOT EXISTS idx_scrap_prod_carton ON scrap_movements(prod_carton_id)');
   // ترحيل قيمة العملة القديمة (اسم) إلى الرمز الجديد
   const cur = d.prepare("SELECT value FROM settings WHERE key='currency'").get();
   if (cur && !['YER', 'SAR', 'USD'].includes(cur.value)) {
@@ -111,6 +181,16 @@ function migrate(d) {
        JOIN sales_returns sr ON sr.invoice_id = ii.invoice_id
        WHERE sr.id = sales_return_items.return_id AND ii.item_id = sales_return_items.item_id
        ORDER BY ii.id LIMIT 1), 'salem')`);
+  }
+  // بنود استلام الإنتاج التام: أكياس مكتملة + كسور، والأكياس المستهلكة وصنفها
+  const recvItemCols = d.prepare('PRAGMA table_info(receive_items)').all().map(c => c.name);
+  const riAdd = (name, sql) => { if (!recvItemCols.includes(name)) d.exec(`ALTER TABLE receive_items ADD COLUMN ${sql}`); };
+  riAdd('breaks', 'breaks INTEGER NOT NULL DEFAULT 0');
+  riAdd('bags_used', 'bags_used INTEGER NOT NULL DEFAULT 0');
+  riAdd('bag_item_id', 'bag_item_id INTEGER REFERENCES items(id)');
+  if (!recvItemCols.includes('bags_used')) {
+    // ترحيل القديم: الاستلام بوحدة الكيس بلا كسور ⇒ الأكياس المستهلكة = العدد المدوّن
+    d.exec(`UPDATE receive_items SET bags_used = CAST(quantity AS INTEGER) WHERE unit='كيس' AND breaks = 0`);
   }
   // أدوار المستخدمين (مدير/إدخال عام/عرض فقط/مخازن): إعادة بناء جدول المستخدمين لتوسيع قيد الأدوار
   // وإسقاط دورَي «حسابات» و«مبيعات» الملغيين — من كان دورهما يتحول إلى إدخال عام.
@@ -273,6 +353,11 @@ function seed(d) {
   if (!s.get('doc_page_size')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('doc_page_size', 'A5');
   if (!s.get('report_page_size')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('report_page_size', 'A4');
   if (!s.get('currency')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('currency', 'YER');
+  // بيانات الترويسة والتذييل في الطباعة: تُملأ من شاشة الإعدادات، ولها قيم فارغة مبدئياً
+  if (!s.get('factory_phone')) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('factory_phone', '');
+  for (const k of ['footer_right', 'footer_center', 'footer_left']) {
+    if (!s.get(k)) d.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run(k, '');
+  }
 }
 
 module.exports = { getDb, setDb, withTransaction, migrate, repairOpenings, dataDir };

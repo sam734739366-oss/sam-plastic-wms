@@ -48,6 +48,12 @@ register('settings', {
             <option value="A4" ${s.report_page_size === 'A4' ? 'selected' : ''}>A4</option>
             <option value="A5" ${s.report_page_size === 'A5' ? 'selected' : ''}>A5</option>
           </select></div>
+          <div class="field full"><span class="muted" style="font-size:11.5px">
+            يظهر اسم التطبيق «سام بلاستيك» ورقم الهاتف تلقائياً في زاوية ترويسة كل مستند مطبوع — أكمل الهاتف في بطاقة «البيانات الأساسية».
+          </span></div>
+          <div class="field"><label>تذييل الطباعة — يمين</label><input id="f-foot-r" value="${esc(s.footer_right || '')}" placeholder="مثال: سام بلاستيك"></div>
+          <div class="field"><label>تذييل الطباعة — وسط</label><input id="f-foot-c" value="${esc(s.footer_center || '')}" placeholder="مثال: شكراً لتعاملكم معنا"></div>
+          <div class="field"><label>تذييل الطباعة — يسار</label><input id="f-foot-l" value="${esc(s.footer_left || '')}" placeholder="مثال: هاتف الدعم: 05xxxxxxxx"></div>
         </div>
       </div>
       <div class="toolbar" style="margin-top:14px">
@@ -71,6 +77,10 @@ register('settings', {
           currency: el.querySelector('#f-currency').value,
           doc_page_size: el.querySelector('#f-docsize').value,
           report_page_size: el.querySelector('#f-reportsize').value,
+          // تُرسل دائماً: settings:save تمسح الجدول ثم تعيد الإدراج بما يُمرَّر إليها
+          footer_right: el.querySelector('#f-foot-r').value,
+          footer_center: el.querySelector('#f-foot-c').value,
+          footer_left: el.querySelector('#f-foot-l').value,
         };
         await api.invoke('settings:save', values, currentUser().id);
         setCurrency(values.currency);

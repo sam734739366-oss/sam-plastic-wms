@@ -94,16 +94,27 @@ test('issues:save rejects insufficient balance', () => {
 test('issues:save customer source does not move factory stock nor salem', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
+  // تصريح خام العميل يجب أن يحمل عميلاً: التالف يُنسب لرصيده لا لمخزون المصنع
+  db.prepare("INSERT INTO parties (name, type) VALUES (?,?)").run('عميل نفخ', 'customer');
   buyCartons(h, 2, 'K-');
   const before = getBalance(db, 1, 1).balance_pieces;
   h['issues:save'](null, {
-    doc_number: 'I-2', doc_date: '2026-10-18', source: 'customer',
+    doc_number: 'I-2', doc_date: '2026-10-18', source: 'customer', party_id: 1,
     items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون' }]
   }, 1);
   assert.equal(getBalance(db, 1, 1).balance_pieces, before);
   assert.equal(salem(db), before);
   const moves = db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='issue'").get().c;
   assert.equal(moves, 0);
+});
+
+test('issues:save customer source without a party is rejected', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  assert.throws(() => h['issues:save'](null, {
+    doc_number: 'I-3', doc_date: '2026-10-18', source: 'customer',
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون' }]
+  }, 1), /اختر العميل/);
 });
 
 test('issues:void returns cartons to stock and reverses moves and salem', () => {

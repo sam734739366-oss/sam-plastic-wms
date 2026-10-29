@@ -122,12 +122,19 @@ module.exports = function register(ipcMain) {
     // الافتتاحية (الافتتاح = العداد − صافي الحركات) ويُعاد حساب الأوزان المخزنة.
     const hasMoves = !isNew && db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE item_id=? AND doc_type != 'opening'").get(row.id).c > 0;
     let id = row.id;
+    // صنف الأكياس المستهلكة لتعبئة هذا الصنف: يُفحص وجوده ويُمنع الربط بالذات
+    const bagItemId = row.bag_item_id ? Number(row.bag_item_id) : null;
+    if (bagItemId) {
+      if (row.id && bagItemId === Number(row.id)) throw new Error('لا يمكن ربط الصنف بنفسه كصنف أكياس');
+      if (!db.prepare('SELECT id FROM items WHERE id=?').get(bagItemId)) throw new Error('صنف الأكياس المحدد غير موجود');
+    }
     const fields = {
       code, name, unit_name: unit,
       weight_grams: row.weight_grams || null,
       pieces_per_carton: row.pieces_per_carton || null,
       pieces_per_shadda: row.pieces_per_shadda || null,
       pieces_per_bag: row.pieces_per_bag || null,
+      bag_item_id: bagItemId,
       qty_salem: splitRows ? splitRows.reduce((a, r) => a + r.salem, 0) : Number(row.qty_salem) || 0,
       qty_talef: splitRows ? splitRows.reduce((a, r) => a + r.talef, 0) : Number(row.qty_talef) || 0,
       qty_muharraz: splitRows ? splitRows.reduce((a, r) => a + r.muharraz, 0) : Number(row.qty_muharraz) || 0,
@@ -166,13 +173,14 @@ module.exports = function register(ipcMain) {
     if (id) {
       db.prepare(`UPDATE items SET code=@code,name=@name,unit_name=@unit_name,weight_grams=@weight_grams,
         pieces_per_carton=@pieces_per_carton,pieces_per_shadda=@pieces_per_shadda,pieces_per_bag=@pieces_per_bag,
+        bag_item_id=@bag_item_id,
         qty_salem=@qty_salem,qty_talef=@qty_talef,qty_muharraz=@qty_muharraz,
         opening_warehouse_id=@opening_warehouse_id,
         is_complement=@is_complement,notes=@notes WHERE id=@id`).run({ ...fields, id });
     } else {
       id = db.prepare(`INSERT INTO items (code,name,item_group,unit_name,weight_grams,pieces_per_carton,
-        pieces_per_shadda,pieces_per_bag,qty_salem,qty_talef,qty_muharraz,opening_warehouse_id,is_complement,notes)
-        VALUES (@code,@name,2,@unit_name,@weight_grams,@pieces_per_carton,@pieces_per_shadda,@pieces_per_bag,
+        pieces_per_shadda,pieces_per_bag,bag_item_id,qty_salem,qty_talef,qty_muharraz,opening_warehouse_id,is_complement,notes)
+        VALUES (@code,@name,2,@unit_name,@weight_grams,@pieces_per_carton,@pieces_per_shadda,@pieces_per_bag,@bag_item_id,
         @qty_salem,@qty_talef,@qty_muharraz,@opening_warehouse_id,@is_complement,@notes)`)
         .run(fields).lastInsertRowid;
     }

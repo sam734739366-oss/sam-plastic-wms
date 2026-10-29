@@ -20,12 +20,37 @@ function money(n, settings) {
   return fmtMoney(n, settings.currency);
 }
 
-function docShell(title, body, pageSize, withSig = true) {
+// العلامة التجارية إلزامية في كل مستند مطبوع: شريط علوي ثابت (اسم التطبيق + الهاتف) وتذييل
+// ثابت بثلاثة مواضع. الثبّت بـ position: fixed يجعل Chromium يعيد رسم الشريطين على كل صفحة
+// فيزيائية عند تقاطع المستند، لا على الأولى والأخيرة فقط.
+const APP_NAME = 'سام بلاستيك';
+
+function brandBar(settings) {
+  const phone = String(settings.factory_phone || '').trim();
+  return `<div class="lhead"><span class="brand">${esc(APP_NAME)}</span>`
+    + (phone ? `<span class="tel">${esc(phone)}</span>` : '')
+    + '</div>';
+}
+
+function footerBar(settings) {
+  const cells = [
+    ['fr', settings.footer_right],
+    ['fc', settings.footer_center],
+    ['fl', settings.footer_left],
+  ].filter(([, t]) => String(t || '').trim());
+  if (!cells.length) return '';
+  return `<div class="foot">${cells.map(([cls, t]) => `<span class="${cls}">${esc(t)}</span>`).join('')}</div>`;
+}
+
+function docShell(title, body, pageSize, withSig = true, settings = {}) {
   return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
   <style>
     @page { size: ${pageSize || 'A5'}; margin: 10mm; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    body { font-family: "Segoe UI", Tahoma, sans-serif; font-size: 13px; color: #0f172a; margin: 0; }
+    body { font-family: "Segoe UI", Tahoma, sans-serif; font-size: 13px; color: #0f172a; margin: 0; padding: 8mm 0 7mm; }
+    .lhead { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 1.2mm 2mm; background: linear-gradient(135deg, #1e3a8a, #3450b8); color: #fff; font-size: 10.5px; }
+    .lhead .brand { font-weight: 700; letter-spacing: .4px; }
+    .lhead .tel { direction: ltr; opacity: .95; }
     .head { background: linear-gradient(135deg, #1e3a8a, #3450b8); color: #fff; border-radius: 10px; padding: 13px 16px; margin-bottom: 12px; }
     .head h1 { margin: 0; font-size: 20px; letter-spacing: .3px; text-align: center; }
     .head .sub { font-size: 12.5px; margin-top: 4px; opacity: .93; text-align: center; }
@@ -34,14 +59,23 @@ function docShell(title, body, pageSize, withSig = true) {
     th, td { border: 1px solid #cbd5e1; padding: 5px 7px; text-align: center; }
     th { background: #1e3a8a; color: #fff; font-weight: 600; }
     tr:nth-child(even) td { background: #f8fafc; }
+    tr { page-break-inside: avoid; }
+    thead { display: table-header-group; }
     .totals td { font-weight: bold; background: #e0e7ff !important; }
     .notes { margin-top: 10px; font-size: 12px; color: #334155; }
     .sig { display: flex; justify-content: space-between; margin-top: 34px; font-size: 12px; color: #1e3a8a; }
     .sig span { border-top: 2px solid #1e3a8a; padding: 4px 18px 0; }
+    .foot { position: fixed; bottom: 0; left: 0; right: 0; display: flex; gap: 10px; padding-top: 1.2mm; border-top: 1px solid #cbd5e1; font-size: 10.5px; color: #334155; }
+    .foot span { flex: 1; }
+    .foot .fr { text-align: right; }
+    .foot .fc { text-align: center; }
+    .foot .fl { text-align: left; }
   </style></head><body>
+  ${brandBar(settings)}
   <div class="head"><h1>${esc(title[0])}</h1><div class="sub">${esc(title[1])}</div></div>
   ${body}
   ${withSig ? '<div class="sig"><span>المستلم</span><span>الطرف الآخر</span><span>المدير</span></div>' : ''}
+  ${footerBar(settings)}
   </body></html>`;
 }
 
@@ -67,7 +101,7 @@ function purchaseTemplate(doc, settings) {
   rows.push(['', 'الإجمالي', '', '', '', '', '', '', `<b>${money(total, settings)}</b>`]);
   return docShell([settings.factory_name || 'سام بلاستيك', 'فاتورة شراء'],
     meta(doc) + tableHtml(['#', 'الصنف', 'الكمية', 'الوحدة', 'السلة', 'الحبات', 'الوزن كجم', 'السعر', 'الإجمالي'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function issueTemplate(doc, settings) {
@@ -77,17 +111,20 @@ function issueTemplate(doc, settings) {
   return docShell([settings.factory_name || 'سام بلاستيك', 'تصريح صرف للإنتاج'],
     meta(doc, `${doc.machine_name ? `<b>المكينة:</b> ${esc(doc.machine_name)} &nbsp;` : ''}${doc.shift_name ? `<b>الوردية:</b> ${esc(doc.shift_name)} &nbsp;` : ''}${doc.receiver_name ? `<b>المستلم:</b> ${esc(doc.receiver_name)} &nbsp;` : ''}`)
     + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السلة', 'الحبات', 'الوزن كجم', 'الكراتين'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function receiveTemplate(doc, settings) {
+  // كسور مطابقة للشاشة: السطر المستلم بوحدة الكيس يُظهر الحبات المفردة، وغيره «—»
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
-    fmt(r.quantity, 3), esc(r.unit), bucketCell(r.bucket), num(r.pieces), fmt(r.weight_kg, 2)]);
+    fmt(r.quantity, 3), Number(r.breaks) > 0 ? num(r.breaks) : '—', esc(r.unit), bucketCell(r.bucket), num(r.pieces), fmt(r.weight_kg, 2)]);
+  const bags = (doc.items || []).reduce((s, r) => s + (Number(r.bags_used) || 0), 0);
   const issueInfo = doc.issue_number ? `<b>تصريح الصرف:</b> ${esc(doc.issue_number)} &nbsp;` : '';
   return docShell([settings.factory_name || 'سام بلاستيك', 'تصريح استلام إنتاج تام'],
     meta(doc, `${doc.machine_name ? `<b>المكينة:</b> ${esc(doc.machine_name)} &nbsp;` : ''}${doc.shift_name ? `<b>الوردية:</b> ${esc(doc.shift_name)} &nbsp;` : ''}${issueInfo}`)
-    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السلة', 'الحبات', 'الوزن كجم'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'كسور', 'الوحدة', 'السلة', 'الحبات', 'الوزن كجم'], rows)
+    + (bags > 0 ? `<div class="notes">الأكياس المستهلكة للتعبئة: <b>${num(bags)}</b> كيس</div>` : '')
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function invoiceTemplate(doc, settings) {
@@ -98,7 +135,7 @@ function invoiceTemplate(doc, settings) {
   rows.push(['', 'الإجمالي', '', '', '', '', '', `<b>${money(total, settings)}</b>`]);
   return docShell([settings.factory_name || 'سام بلاستيك', `فاتورة ${typeLabel}`],
     meta(doc) + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السلة', 'السعر', 'الإجمالي'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function exitTemplate(doc, settings) {
@@ -107,7 +144,7 @@ function exitTemplate(doc, settings) {
   return docShell([settings.factory_name || 'سام بلاستيك', 'تصريح خروج'],
     meta(doc, `${doc.warehouse_name ? `<b>المخزن:</b> ${esc(doc.warehouse_name)} &nbsp;` : ''}${doc.destination ? `<b>جهة التسليم:</b> ${esc(doc.destination)} &nbsp;` : ''}`)
     + tableHtml(['#', 'الصنف', 'السلة', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function tollReceiptTemplate(doc, settings) {
@@ -115,7 +152,7 @@ function tollReceiptTemplate(doc, settings) {
     num(r.boxes), num(r.pieces_per_box), num(r.pieces), fmt(r.weight_kg, 2)]);
   return docShell([settings.factory_name || 'سام بلاستيك', 'سند استلام خام (نفخ للغير)'],
     meta(doc) + tableHtml(['#', 'الصنف', 'العلب', 'حبات/علبة', 'الحبات', 'الوزن كجم'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function tollDeliveryTemplate(doc, settings) {
@@ -124,7 +161,7 @@ function tollDeliveryTemplate(doc, settings) {
   return docShell([settings.factory_name || 'سام بلاستيك', 'سند تسليم منفوخ (نفخ للغير)'],
     meta(doc, `${doc.invoice_number ? `<b>فاتورة الأجرة:</b> ${esc(doc.invoice_number)} &nbsp;` : ''}`)
     + tableHtml(['#', 'الصنف', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function scrapTemplate(doc, settings) {
@@ -134,7 +171,7 @@ function scrapTemplate(doc, settings) {
   return docShell([settings.factory_name || 'سام بلاستيك', 'سند تالف ومصيره'],
     meta(doc, `${doc.warehouse_name ? `<b>المخزن:</b> ${esc(doc.warehouse_name)} &nbsp;` : ''}`)
     + tableHtml(['الصنف', 'المصير', 'الحبات', 'الوزن كجم', 'السعر'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function transferTemplate(doc, settings) {
@@ -143,7 +180,7 @@ function transferTemplate(doc, settings) {
   return docShell([settings.factory_name || 'سام بلاستيك', 'سند نقل بين المخازن'],
     meta(doc, `<b>من:</b> ${esc(doc.from_name)} &nbsp; <b>إلى:</b> ${esc(doc.to_name)} &nbsp;`)
     + tableHtml(['#', 'الصنف', 'السلة', 'الكمية', 'الوحدة', 'الحبات', 'الوزن كجم'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function productionTemplate(doc, settings) {
@@ -159,7 +196,7 @@ function productionTemplate(doc, settings) {
       ${doc.item_code ? ` &nbsp; <b>الصنف:</b> ${esc(doc.item_code)} — ${esc(doc.item_name)}` : ''}
       ${doc.issue_number ? `<br><b>تصريح الصرف:</b> ${esc(doc.issue_number)}` : ''}</div>`
     + tableHtml(['حبات الكرتون', 'سليم', 'تالف قبل النفخ', 'تالف بعد النفخ', 'غير محسوب'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function returnTemplate(doc, settings) {
@@ -171,7 +208,7 @@ function returnTemplate(doc, settings) {
   return docShell([settings.factory_name || 'سام بلاستيك', isSale ? 'مرتجع بيع' : 'مرتجع شراء'],
     meta(doc, `${isSale ? (doc.invoice_number ? `<b>فاتورة البيع:</b> ${esc(doc.invoice_number)} &nbsp;` : '') : (doc.purchase_number ? `<b>فاتورة الشراء:</b> ${esc(doc.purchase_number)} &nbsp;` : '')}`)
     + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'الوحدة', 'السلة', 'السعر', 'الإجمالي'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function paymentTemplate(doc, settings) {
@@ -182,13 +219,13 @@ function paymentTemplate(doc, settings) {
   ];
   return docShell([settings.factory_name || 'سام بلاستيك', isIn ? 'سند قبض' : 'سند دفع'],
     meta(doc) + tableHtml(['الطرف', 'النوع', 'المبلغ'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size);
+    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
 function reportTemplate(settings, title, metaLines, headers, rows, foot = '') {
   return docShell([settings.factory_name || 'سام بلاستيك', title],
     `<div class="meta">${metaLines.map(esc).join(' &nbsp; ')}</div>${tableHtml(headers, rows)}${foot}`,
-    settings.report_page_size || 'A4', false);
+    settings.report_page_size || 'A4', false, settings);
 }
 
 // دليل المستخدم: صفحة غنية بأقسام وخطوات — تُطبع على A4

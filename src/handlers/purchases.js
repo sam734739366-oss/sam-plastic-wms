@@ -2,20 +2,8 @@ const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
 const { writeMoves, voidDoc, applyBucketsDelta } = require('../stock');
-const { suggestNumber, checkDocNumber } = require('../docs');
+const { suggestNumber, checkDocNumber, nextCartonNumbers } = require('../docs');
 const ledger = require('../ledger');
-
-function nextCartonNumbers(db, prefix, count) {
-  const rows = db.prepare(`SELECT carton_number FROM cartons WHERE carton_number LIKE ? || '%'`).all(prefix);
-  let max = 0;
-  for (const r of rows) {
-    const m = String(r.carton_number).slice(prefix.length).match(/^\d+/);
-    if (m) max = Math.max(max, parseInt(m[0], 10));
-  }
-  const nums = [];
-  for (let i = 1; i <= count; i++) nums.push(`${prefix}${max + i}`);
-  return nums;
-}
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('purchases:suggest', () => suggestNumber(getDb(), 'purchases'));

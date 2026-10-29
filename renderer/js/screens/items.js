@@ -63,6 +63,7 @@ function collect(back) {
     pieces_per_carton: num(v('f-carton')) || null,
     pieces_per_shadda: num(v('f-shadda')) || null,
     pieces_per_bag: num(v('f-bag')) || null,
+    bag_item_id: num(v('f-bag-item')) || null,
     opening_split,
     is_complement: back.querySelector('#f-complement')?.checked ? 1 : 0,
     notes: v('f-notes').trim() || null,
@@ -285,6 +286,12 @@ register('items', {
           <div class="field"><label>عدد القطع في الكرتون (اختياري)</label><input id="f-carton" inputmode="numeric" value="${esc(row?.pieces_per_carton || '')}"></div>
           <div class="field"><label>عدد القطع في الشدة (اختياري)</label><input id="f-shadda" inputmode="numeric" value="${esc(row?.pieces_per_shadda || '')}"></div>
           <div class="field"><label>عدد القطع في الكيس (اختياري)</label><input id="f-bag" inputmode="numeric" value="${esc(row?.pieces_per_bag || '')}"></div>
+          <div class="field"><label>صنف الأكياس المستهلكة (اختياري)</label>
+            <select id="f-bag-item"><option value="">— بلا خصم آلي —</option>
+              ${rows.filter(i => i.id !== row?.id).map(i => `<option value="${i.id}" ${row?.bag_item_id === i.id ? 'selected' : ''}>${esc(i.code)} — ${esc(i.name)}</option>`).join('')}
+            </select>
+            <span class="muted" style="font-size:11px">عند استلام الإنتاج التام بوحدة الكيس يُخصم عدد الأكياس المستهلكة من رصيد هذا الصنف</span>
+          </div>
           <div class="field full"><label>توزيع الرصيد الافتتاحي على المخازن</label>${splitRowsHtml}</div>
           <div class="field full"><label style="display:flex;align-items:center;gap:8px;margin:0;font-weight:600;cursor:pointer">
             <input type="checkbox" id="f-complement" ${row?.is_complement ? 'checked' : ''} style="width:auto;flex:none;accent-color:#2450c8">

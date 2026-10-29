@@ -132,11 +132,11 @@ register('receives', {
         </div>
         <table class="doc-lines">
           <thead><tr>
-            <th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>الوحدة</th><th>الحبات / الوزن</th><th>ملاحظات</th><th></th>
+            <th>الصنف</th><th>المخزن</th><th>السلة</th><th>الكمية</th><th>كسور</th><th>الوحدة</th><th>الحبات / الوزن</th><th>ملاحظات</th><th></th>
           </tr></thead>
           <tbody id="irows"></tbody>
           <tfoot><tr>
-            <td colspan="5"><b>إجمالي الحبات المستلمة</b></td>
+            <td colspan="6"><b>إجمالي الحبات المستلمة</b></td>
             <td id="f-total">0</td><td colspan="2"></td>
           </tr></tfoot>
         </table>
@@ -147,6 +147,7 @@ register('receives', {
               item_id: Number(r.querySelector('.p-item').value),
               warehouse_id: Number(r.querySelector('.p-wh').value),
               quantity: parseFloat(r.querySelector('.p-qty').value) || 0,
+              breaks: Number(r.querySelector('.p-breaks').value) || 0,
               unit: r.querySelector('.p-unit').value,
               notes: r.querySelector('.p-notes').value,
               bucket: r.querySelector('.p-bucket').value,
@@ -178,12 +179,23 @@ register('receives', {
       };
       back.querySelector('#f-source').onchange = applySource;
 
+      // نفس حساب المخدَم: الحبات = مكتملة × حبات/كيس + كسور، والأكياس = ceil(الحبات ÷ حبات/كيس)
+      function linePieces(rowEl) {
+        const item = itemById(Number(rowEl.querySelector('.p-item').value));
+        const unit = rowEl.querySelector('.p-unit').value;
+        const qty = rowEl.querySelector('.p-qty').value;
+        const breaks = Number(rowEl.querySelector('.p-breaks').value) || 0;
+        const per = Number(item?.pieces_per_bag) || 0;
+        if (unit === 'كيس' && per > 0) {
+          const total = (Math.round(Number(qty) || 0) * per) + breaks;
+          return { pieces: total, bags: Math.ceil(total / per), per };
+        }
+        return { pieces: toPieces(qty, unit, item) || 0, bags: 0, per };
+      }
+
       function updateTotal() {
         let total = 0;
-        for (const r of rowsWrap.querySelectorAll('.irow')) {
-          const item = itemById(Number(r.querySelector('.p-item').value));
-          total += toPieces(r.querySelector('.p-qty').value, r.querySelector('.p-unit').value, item) || 0;
-        }
+        for (const r of rowsWrap.querySelectorAll('.irow')) total += linePieces(r).pieces;
         totalEl.textContent = fmtNum(total, 0) + ' حبة';
       }
 
@@ -195,6 +207,7 @@ register('receives', {
           <td><select class="p-wh">${warehouses.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('')}</select></td>
           <td><select class="p-bucket">${bucketOptions(data.bucket || 'salem')}</select></td>
           <td><input class="p-qty num" type="number" min="0" step="any" value="${esc(data.quantity ?? '')}"></td>
+          <td><input class="p-breaks num" type="number" min="0" step="1" value="${esc(data.breaks ?? '')}" title="حبات مفردة بعد آخر كيس" disabled style="max-width:80px"></td>
           <td><select class="p-unit"></select></td>
           <td><span class="p-calc muted"></span></td>
           <td><input class="p-notes" placeholder="ملاحظات" value="${esc(data.notes || '')}"></td>
@@ -207,6 +220,7 @@ register('receives', {
         const itemSel = row.querySelector('.p-item');
         const unitSel = row.querySelector('.p-unit');
         const qty = row.querySelector('.p-qty');
+        const breaksEl = row.querySelector('.p-breaks');
         const calc = row.querySelector('.p-calc');
 
         function refreshUnits() {
@@ -221,10 +235,14 @@ register('receives', {
         function refresh() {
           refreshUnits();
           const item = itemById(Number(itemSel.value));
-          const pieces = toPieces(qty.value, unitSel.value, item);
+          // الكسور تُكتب فقط عندما تكون الوحدة كيساً والصنف له «حبات/كيس»
+          const baggable = unitSel.value === 'كيس' && Number(item?.pieces_per_bag) > 0;
+          breaksEl.disabled = !baggable;
+          if (!baggable) breaksEl.value = '';
+          const { pieces, bags } = linePieces(row);
           if (pieces != null && pieces > 0) {
             const kg = piecesToWeightKg(pieces, item.weight_grams);
-            calc.textContent = `${fmtNum(pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`;
+            calc.textContent = `${fmtNum(pieces, 0)} حبة${baggable ? ` — ${fmtNum(bags, 0)} كيس` : ''}${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`;
           } else {
             calc.textContent = '—';
           }
@@ -234,6 +252,7 @@ register('receives', {
         itemSel.onchange = refresh;
         unitSel.onchange = refresh;
         qty.oninput = refresh;
+        breaksEl.oninput = refresh;
         if (data.item_id) combo.setValue(data.item_id);
         if (data.warehouse_id) row.querySelector('.p-wh').value = String(data.warehouse_id);
         refresh();
@@ -241,7 +260,7 @@ register('receives', {
 
       if (doc && doc.items.length) {
         for (const it of doc.items) {
-          addRow({ item_id: it.item_id, warehouse_id: it.warehouse_id, quantity: it.quantity, unit: it.unit, notes: it.notes, bucket: it.bucket });
+          addRow({ item_id: it.item_id, warehouse_id: it.warehouse_id, quantity: it.quantity, breaks: it.breaks, unit: it.unit, notes: it.notes, bucket: it.bucket });
         }
       } else {
         addRow();

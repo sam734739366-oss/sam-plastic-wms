@@ -191,6 +191,8 @@ register('issues', {
         [...rowsWrap.querySelectorAll('.irow')].forEach(r => r._refresh && r._refresh());
       };
       back.querySelector('#f-source').onchange = applySource;
+      // تغيّر العميل يغيّر قائمة الكراتين المتاحة لعهدته
+      back.querySelector('#f-party').onchange = applySource;
 
       function addRow(data = {}) {
         const row = document.createElement('tr');
@@ -239,10 +241,14 @@ register('issues', {
           refreshUnits();
           renderTags();
           const item = itemById(Number(itemSel.value));
-          const showPick = !isCustomer() && unitSel.value === 'كرتون' && item.pieces_per_carton;
+          const partyId = back.querySelector('#f-party').value;
+          // كراتين خام العميل تُختار أيضاً: الفرق في الأثر المخزني لا في تتبّع الكرتون
+          const showPick = unitSel.value === 'كرتون' && item.pieces_per_carton;
           pickBtn.hidden = !showPick;
           if (isCustomer()) {
-            balText.textContent = 'لا يمس مخزون المصنع';
+            balText.textContent = partyId
+              ? 'عهدة العميل — لا يمس مخزون المصنع'
+              : 'اختر العميل لعرض كراتين عهدة المصنع';
           } else {
             balText.textContent = '…';
             try {
@@ -258,13 +264,16 @@ register('issues', {
 
         pickBtn.onclick = async () => {
           const item = itemById(Number(itemSel.value));
-          const avail = await api.invoke('issues:cartonsAvailable', item.id);
+          const customer = isCustomer();
+          const partyId = back.querySelector('#f-party').value;
+          if (customer && !partyId) { toast('اختر العميل أولاً لعرض كراتين عهدته', 'err'); return; }
+          const avail = await api.invoke('issues:cartonsAvailable', item.id, customer ? 'customer' : 'own', customer ? Number(partyId) : null);
           openModal(`كراتين متاحة — ${esc(item.name)}`, `
             <div style="max-height:300px;overflow:auto;line-height:2.2">
               ${avail.length ? avail.map(c => `<label class="check" style="display:block;cursor:pointer">
                 <input type="checkbox" value="${esc(c.carton_number)}" ${row._cartons.includes(c.carton_number) ? 'checked' : ''}>
-                ${esc(c.carton_number)} (${esc(c.pieces)} حبة — فاتورة ${esc(c.purchase_number || '—')})</label>`).join('')
-                : '<p class="muted">لا توجد كراتين متاحة لهذا الصنف</p>'}
+                ${esc(c.carton_number)} (${esc(c.pieces)} حبة — ${customer ? 'سند استلام' : 'فاتورة'} ${esc((customer ? c.receipt_number : c.purchase_number) || '—')})</label>`).join('')
+                : `<p class="muted">${customer ? 'لا توجد كراتين متاحة لعهدة هذا العميل من هذا الصنف' : 'لا توجد كراتين متاحة لهذا الصنف'}</p>`}
             </div>`,
             [{ label: 'تأكيد', class: 'primary', onClick: (b) => {
               row._cartons = [...b.querySelectorAll('input:checked')].map(c => c.value);

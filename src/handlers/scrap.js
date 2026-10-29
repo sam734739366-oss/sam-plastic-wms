@@ -4,7 +4,18 @@ const { toPieces, piecesToWeightKg } = require('../units');
 const { writeMoves, voidDoc, getBalance, bucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
 
-const DISP_LABEL = { to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد', sold_scrap: 'بيع خردة' };
+const DISP_LABEL = {
+  to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد',
+  sold_scrap: 'بيع خردة', production_defect: 'تالف إنتاج بخام عميل'
+};
+
+// سند التالف الناتج عن نتيجة إنتاج كرتون عهدة عميل: إدارته من شاشة الإنتاج،
+// وتعديله يدوياً يفصله عن الكرتون فيفقد النظام تتبعه عند الحذف أو التعديل.
+function assertNotAutoDoc(row) {
+  if (row && row.prod_carton_id) {
+    throw new Error('سند التالف هذا آلي من نتيجة إنتاج — عدّل النتيجة نفسها من شاشة الإنتاج');
+  }
+}
 
 // حساب توزيع الخصم: يخصم من التالف أولاً والباقي من السليم.
 // يُخزَّن التوزيع مع السند لعكس الأثر بدقة عند التعديل والإلغاء.
@@ -91,6 +102,7 @@ module.exports = function register(ipcMain) {
     }
     const isNew = !doc.id;
     const before = isNew ? null : db.prepare('SELECT * FROM scrap_movements WHERE id=?').get(doc.id);
+    assertNotAutoDoc(before);
     let id = doc.id;
     withTransaction(db, () => {
       // عكس أثر السند القديم أولاً (بدقة حسب التوزيع المخزن)
@@ -163,6 +175,7 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     const before = db.prepare('SELECT * FROM scrap_movements WHERE id=?').get(id);
     if (!before) throw new Error('السند غير موجود');
+    assertNotAutoDoc(before);
     withTransaction(db, () => {
       voidDoc(db, 'scrap', id, userId);
       applyStored(db, before, -1);

@@ -38,11 +38,21 @@ module.exports = function register(ipcMain) {
     return doc;
   });
 
-  ipcMain.handle('issues:cartonsAvailable', (e, itemId) => {
+  ipcMain.handle('issues:cartonsAvailable', (e, itemId, source, partyId) => {
     const db = getDb();
-    return db.prepare(`SELECT c.*, p.doc_number purchase_number FROM cartons c
+    // كراتين المصنع وكراتين خام العميل لا تُخلط في قائمة الاختيار:
+    // كرتونة العميل تظهر على تصريح نفس العميل فقط، وإلا تُخصم من رصيد عميل آخر.
+    if (source === 'customer') {
+      if (!partyId) return [];
+      return db.prepare(`SELECT c.*, r.doc_number AS receipt_number FROM cartons c
+        LEFT JOIN customer_raw_receipts r ON r.id=c.receipt_id
+        WHERE c.item_id=? AND c.status='in_stock' AND c.source='customer' AND c.party_id=?
+        ORDER BY c.carton_number`).all(itemId, partyId);
+    }
+    return db.prepare(`SELECT c.*, p.doc_number AS purchase_number FROM cartons c
       LEFT JOIN purchases p ON p.id=c.purchase_id
-      WHERE c.item_id=? AND c.status='in_stock' ORDER BY c.carton_number`).all(itemId);
+      WHERE c.item_id=? AND c.status='in_stock' AND COALESCE(c.source,'own')='own'
+      ORDER BY c.carton_number`).all(itemId);
   });
 
   ipcMain.handle('issues:save', (e, doc, userId) => {
@@ -52,6 +62,8 @@ module.exports = function register(ipcMain) {
     if (!doc.doc_date) throw new Error('التاريخ مطلوب');
     if (!doc.items || doc.items.length === 0) throw new Error('أضف بنداً واحداً على الأقل');
     if (!['own', 'customer'].includes(doc.source)) throw new Error('المصدر غير صالح');
+    // تصاريح خام العميل تُوجّه التالف لرصيد العميل لاحقاً — بلا عميل لا يعرف النظام أين يخصم
+    if (doc.source === 'customer' && !doc.party_id) throw new Error('اختر العميل عند الصرف من خام عميل');
     if (!checkDocNumber(db, 'issue_permits', number, doc.id)) throw new Error('رقم التصريح مكرر');
     const isNew = !doc.id;
     const before = isNew ? null : db.prepare('SELECT * FROM issue_permits WHERE id=?').get(doc.id);
@@ -82,23 +94,44 @@ module.exports = function register(ipcMain) {
         (issue_permit_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, carton_ids, notes, bucket)
         VALUES (?,?,?,?,?,?,?,?,?,?)`);
       const issueCarton = db.prepare(`UPDATE cartons SET status='issued', issue_date=?, issue_permit_id=?
-        WHERE carton_number=? AND status='in_stock'`);
+        WHERE carton_number=? AND status='in_stock' AND source=? AND (source='own' OR party_id=?)`);
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
-        const pieces = toPieces(it.quantity, it.unit, item);
-        const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         const bucket = ['salem', 'talef', 'muharraz'].includes(it.bucket) ? it.bucket : 'salem';
         const cartonIds = (it.carton_ids || []).filter(Boolean);
+        let pieces = toPieces(it.quantity, it.unit, item);
+        // عند اختيار كراتين فالعبرة بحباتها الفعلية لا بعددها × «حبات/كرتون»:
+        // آخر كرتونة من خام العميل قد تكون ناقصة، فالحساب بالعدد يُبالغ في الكمية.
+        // كراتين المصنع كلها موحّدة القياس، فلا تتغيّر نتيجة الفاتورة القديمة.
+        if (cartonIds.length) {
+          const marks = cartonIds.map(() => '?').join(',');
+          const found = db.prepare(`SELECT carton_number, pieces FROM cartons
+            WHERE carton_number IN (${marks}) AND status='in_stock' AND source=?`)
+            .all(...cartonIds, doc.source);
+          if (found.length !== cartonIds.length) {
+            const have = new Set(found.map(c => c.carton_number));
+            const missing = cartonIds.filter(cn => !have.has(cn)).join('، ');
+            throw new Error(`الكرتون ${missing} غير متاح في المخزن`);
+          }
+          pieces = found.reduce((s, c) => s + (Number(c.pieces) || 0), 0);
+        }
+        const kg = piecesToWeightKg(pieces, item.weight_grams || 0);
         if (doc.source === 'own') {
           const bal = getBalance(db, it.item_id, it.warehouse_id);
           const available = bal[`qty_${bucket}`] || 0;
           const bucketLabel = { salem: 'السليم', talef: 'التالف', muharraz: 'المحرز' }[bucket];
           if (available < pieces) throw new Error(`رصيد ${bucketLabel} غير كافٍ للصنف ${item.code} (المطلوب ${pieces} حبة والمتوفر ${available})`);
           moves.push({ item_id: item.id, warehouse_id: it.warehouse_id, qty_out_pieces: pieces, weight_out_kg: kg, bucket, notes: it.notes });
-          for (const cn of cartonIds) {
-            const r = issueCarton.run(doc.doc_date, id, cn);
-            if (r.changes === 0) throw new Error(`الكرتون ${cn} غير متاح في المخزن`);
+        }
+        // الكراتين تُصرف في الحالتين: فرق المصدر في الأثر المخزني لا في توثيق الكراتين،
+        // فخرطوم الإنتاج يحتاج الكرتون ليتتبّع النتيجة (وتالف خام العميل يُنسب لصاحبه).
+        for (const cn of cartonIds) {
+          const r = issueCarton.run(doc.doc_date, id, cn, doc.source, doc.party_id || null);
+          if (r.changes === 0) {
+            throw new Error(doc.source === 'own'
+              ? `الكرتون ${cn} غير متاح في المخزن`
+              : `الكرتون ${cn} غير متاح لكرتونات خام هذا العميل`);
           }
         }
         insItem.run(id, item.id, it.warehouse_id, it.quantity, it.unit, pieces, kg,

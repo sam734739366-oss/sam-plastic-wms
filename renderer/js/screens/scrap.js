@@ -3,8 +3,10 @@ import { api, currentUser } from '../api.js';
 import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc, itemComboIn } from '../ui.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
-const DISP_LABEL = { to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد', sold_scrap: 'بيع خردة' };
-const DISP_TAG = { to_recycled: 'muharraz', to_stock: 'salem', to_supplier: 'new', sold_scrap: 'talef' };
+const DISP_LABEL = { to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد', sold_scrap: 'بيع خردة', production_defect: 'تالف إنتاج بخام عميل' };
+const DISP_TAG = { to_recycled: 'muharraz', to_stock: 'salem', to_supplier: 'new', sold_scrap: 'talef', production_defect: 'talef' };
+// سند آلي من نتيجة إنتاج: يُعرض ويُصنَّف، لكنه ليس خياراً يدوياً في النموذج
+const AUTO_DISP = ['production_defect'];
 
 register('scrap', {
   title: 'التالف ومصيره',
@@ -104,7 +106,7 @@ register('scrap', {
           <div class="field"><label>الصنف *</label><div id="f-item-wrap"></div></div>
           <div class="field"><label>مصير التالف *</label>
             <select id="f-disp">
-              ${Object.entries(DISP_LABEL).map(([v, l]) => `<option value="${v}" ${doc && doc.disposition === v ? 'selected' : ''}>${l}</option>`).join('')}
+              ${Object.entries(DISP_LABEL).filter(([v]) => !AUTO_DISP.includes(v)).map(([v, l]) => `<option value="${v}" ${doc && doc.disposition === v ? 'selected' : ''}>${l}</option>`).join('')}
             </select></div>
           <div class="field" id="w-wh"><label>المخزن</label>
             <select id="f-wh"><option value="">—</option>${whOpts}</select></div>

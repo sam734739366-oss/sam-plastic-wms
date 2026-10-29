@@ -1,8 +1,33 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { suggestNumber, checkDocNumber } = require('../docs');
+const { suggestNumber, checkDocNumber, nextCartonNumbers } = require('../docs');
 const ledger = require('../ledger');
+
+// بادئة ترقيم كراتين خام العميل — تميّزها عن كراتين مشتريات المصنع في الجدول نفسه
+const CARTON_PREFIX = 'C-';
+// حدّ أمان: صغر «حبات/كرتون» مع كمية كبيرة قد يولّد آلاف الكراتين في سند واحد
+const MAX_CARTONS_PER_RECEIPT = 1000;
+
+// تقسيم حبات بند إلى كراتين بحسب حبات الصنف لكل كرتون، وآخرها قد يكون ناقصاً.
+// الصنف بلا «حبات/كرتون» لا يُكرتب (نفس سلوك المشتريات).
+function planCartons(item, pieces) {
+  const per = Number(item.pieces_per_carton) || 0;
+  if (per <= 0 || pieces <= 0) return [];
+  const out = [];
+  let left = pieces;
+  while (left > 0) {
+    const take = Math.min(per, left);
+    out.push({ item_id: item.id, pieces: take });
+    left -= take;
+  }
+  return out;
+}
+
+function assertCartonsEditable(db, receiptId) {
+  const issued = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE receipt_id=? AND status != 'in_stock'`).get(receiptId).c;
+  if (issued > 0) throw new Error('لا يمكن تعديل السند — توجد كراتين مصروفة للإنتاج، ألغِ تصريح الصرف أولاً');
+}
 
 function customerBalance(db, partyId) {
   return db.prepare(`SELECT
@@ -34,6 +59,8 @@ module.exports = function register(ipcMain) {
     if (!doc) throw new Error('سند الاستلام غير موجود');
     doc.items = db.prepare(`SELECT ri.*, i.code, i.name, i.pieces_per_carton FROM customer_raw_items ri
       JOIN items i ON i.id=ri.item_id WHERE ri.receipt_id=? ORDER BY ri.id`).all(id);
+    doc.cartons = db.prepare(`SELECT c.*, i.code item_code, i.name item_name FROM cartons c
+      JOIN items i ON i.id=c.item_id WHERE c.receipt_id=? ORDER BY c.carton_number`).all(id);
     return doc;
   });
 
@@ -50,6 +77,9 @@ module.exports = function register(ipcMain) {
     let id = doc.id;
     withTransaction(db, () => {
       if (id) {
+        // الكراتين الناتجة عن السند تُعاد توليداً، فلا يُسمح بتعديله بعد الصرف للإنتاج
+        assertCartonsEditable(db, id);
+        db.prepare('DELETE FROM cartons WHERE receipt_id=?').run(id);
         db.prepare('DELETE FROM customer_raw_items WHERE receipt_id=?').run(id);
         db.prepare('UPDATE customer_raw_receipts SET doc_number=?, doc_date=?, party_id=?, notes=? WHERE id=?')
           .run(number, doc.doc_date, doc.party_id, doc.notes || null, id);
@@ -59,6 +89,7 @@ module.exports = function register(ipcMain) {
       }
       const ins = db.prepare(`INSERT INTO customer_raw_items
         (receipt_id, item_id, boxes, pieces_per_box, pieces, unit, weight_kg, notes) VALUES (?,?,?,?,?,?,?,?)`);
+      const cartonPlan = [];
       for (const it of doc.items) {
         const item = db.prepare('SELECT * FROM items WHERE id=?').get(it.item_id);
         if (!item) throw new Error('صنف غير موجود');
@@ -80,6 +111,18 @@ module.exports = function register(ipcMain) {
         }
         const weight = Number(it.weight_kg) || null;
         ins.run(id, item.id, boxes, perBox || null, pieces, unit, weight, it.notes || null);
+        cartonPlan.push(...planCartons(item, pieces));
+      }
+      // كراتين خام العميل: وحدة متابعة للإنتاج فقط — لا حركات مخزون ولا سلات للمصنع
+      if (cartonPlan.length) {
+        if (cartonPlan.length > MAX_CARTONS_PER_RECEIPT) {
+          throw new Error(`عدد الكراتين المتولّد (${cartonPlan.length}) يتجاوز ${MAX_CARTONS_PER_RECEIPT} — راجع «حبات/كرتون» للصنف`);
+        }
+        const nums = nextCartonNumbers(db, CARTON_PREFIX, cartonPlan.length);
+        const insCarton = db.prepare(`INSERT INTO cartons
+          (carton_number, item_id, purchase_id, pieces, status, party_id, source, receipt_id)
+          VALUES (?,?,NULL,?,'in_stock',?,'customer',?)`);
+        cartonPlan.forEach((c, i) => insCarton.run(nums[i], c.item_id, c.pieces, doc.party_id, id));
       }
     });
     audit(db, userId, isNew ? 'create' : 'update', 'customer_raw_receipt', id, before, doc);
@@ -90,7 +133,12 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     const before = db.prepare('SELECT * FROM customer_raw_receipts WHERE id=?').get(id);
     if (!before) throw new Error('سند الاستلام غير موجود');
-    db.prepare(`UPDATE customer_raw_receipts SET status='void' WHERE id=?`).run(id);
+    assertCartonsEditable(db, id);
+    withTransaction(db, () => {
+      // كراتين لم تُصرف بعد: تُحذف كي لا تظهر كمتاحة للصرف على سند ملغى
+      db.prepare('DELETE FROM cartons WHERE receipt_id=?').run(id);
+      db.prepare(`UPDATE customer_raw_receipts SET status='void' WHERE id=?`).run(id);
+    });
     audit(db, userId, 'void', 'customer_raw_receipt', id, before, null);
     return { ok: true };
   });
