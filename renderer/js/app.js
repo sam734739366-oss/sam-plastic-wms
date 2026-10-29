@@ -49,9 +49,35 @@ const updBtn = document.getElementById('check-update');
 const updLabel = document.getElementById('update-label');
 
 function setUpdState(r) {
-  const label = { available: 'يوجد تحديث', downloaded: 'جاهز للتثبيت', current: 'أحدث إصدار', dev: 'تحديثات' }[r.state] || 'تحديثات';
+  const pct = r && r.progress != null && r.state === 'downloading' ? ` ${r.progress}%` : '';
+  const label = {
+    available: 'يوجد تحديث', downloading: 'تنزيل' + pct, downloaded: 'جاهز للتثبيت',
+    current: 'أحدث إصدار', dev: 'تحديثات', error: 'فشل الفحص', timeout: 'انقطع الفحص',
+  }[r && r.state] || 'تحديثات';
   updLabel.textContent = label;
-  updBtn.classList.toggle('updatable', r.state === 'available' || r.state === 'downloaded');
+  updBtn.classList.toggle('updatable', !!r && (r.state === 'available' || r.state === 'downloaded'));
+}
+
+// electron-updater لا يعرض شريط تقدّم بنفسه، فيبدو التطبيق صامتًا دقائق بعد الموافقة.
+// نراقب الحالة كل ثانيتين حتى يظهر «جاهز للتثبيت» فيعرف المستخدم أن التنزيل ماشي.
+let watchTimer = null;
+function watchDownload() {
+  if (watchTimer) clearInterval(watchTimer);
+  let ticks = 0;
+  watchTimer = setInterval(async () => {
+    if (++ticks > 900) { clearInterval(watchTimer); watchTimer = null; return; }
+    try {
+      const st = await window.api.invoke('app:status');
+      const c = st.lastCheck;
+      if (st.downloading || (c && c.state === 'downloading')) { setUpdState({ state: 'downloading', progress: c && c.progress }); return; }
+      if (c && c.state === 'downloaded') { setUpdState(c); toast('اكتمل التنزيل — ستظهر نافذة إعادة التشغيل', 'ok'); }
+      else if (c && c.state === 'available') { setUpdState(c); return; }
+      else setUpdState(c || { state: 'current' });
+      clearInterval(watchTimer); watchTimer = null;
+    } catch {
+      clearInterval(watchTimer); watchTimer = null;
+    }
+  }, 2000);
 }
 
 async function loadUpdateStatus() {
@@ -69,7 +95,8 @@ updBtn.onclick = async () => {
   try {
     const r = await window.api.invoke('app:checkUpdate');
     setUpdState(r);
-    if (r.state === 'available') toast(`يوجد إصدار جديد: ${r.remote || ''} — سيُطلب منك التنزيل`, 'ok');
+    if (r.state === 'available') { toast(`يوجد إصدار جديد: ${r.remote || ''} — اختر «تنزيل وتحديث» من النافذة`, 'ok'); watchDownload(); }
+    else if (r.state === 'downloading') { toast(r.message || 'التنزيل جارٍ', ''); watchDownload(); }
     else if (r.state === 'downloaded') toast(`اكتمل تنزيل الإصدار ${r.remote || ''} — أعد التشغيل للتثبيت`, 'ok');
     else if (!r.ok) toast(r.message || 'تعذّر التحقق من التحديثات', 'err');
     else toast(r.message || 'أنت على أحدث إصدار', 'ok');

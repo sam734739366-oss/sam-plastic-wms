@@ -1,6 +1,6 @@
 {
   "name": "sam-plastic",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "برنامج سام بلاستيك لإدارة مصنع نفخ العبوات البلاستيكية",
   "main": "main.js",
   "scripts": {

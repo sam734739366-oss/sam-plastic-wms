@@ -7,6 +7,7 @@ const CHECK_TIMEOUT_MS = 45000;
 let cached = null;      // autoUpdater — أو false إن لم تكن الحزمة متوفرة
 let lastCheck = null;   // آخر نتيجة، تُعرض في الواجهة بلا إعادة فحص
 let manualBusy = false; // قمع نافذة الفحص التلقائي أثناء فحص يدوي حتى لا تظهر رسالتان
+let downloading = false; // تنزيل جارٍ الآن — يمنع بدء فحص ثانٍ فوقه
 
 function updater() {
   if (cached !== null) return cached;
@@ -38,7 +39,13 @@ function wire(a) {
     if (!manualBusy) promptDownload(info);
   });
   a.on('update-not-available', () => snap('current'));
+  a.on('download-progress', (p) => {
+    downloading = true;
+    const base = lastCheck || snap('downloading');
+    lastCheck = { ...base, state: 'downloading', progress: Math.round(num(p && p.percent) || 0) };
+  });
   a.on('update-downloaded', (info) => {
+    downloading = false;
     snap('downloaded', null, info && info.version);
     if (!manualBusy) promptInstall();
   });
@@ -88,6 +95,11 @@ async function checkNow() {
   const a = updater();
   if (!a) return { ok: false, state: 'unavailable', local: app.getVersion(), remote: null,
     message: 'حزمة electron-updater غير متوفرة في هذه النسخة.' };
+  if (downloading) {
+    const pct = lastCheck && lastCheck.progress != null ? lastCheck.progress : 0;
+    return { ok: true, state: 'downloading', local: app.getVersion(), remote: (lastCheck && lastCheck.remote) || null,
+      progress: pct, message: `التنزيل جارٍ (${pct}%) — يكتمل الطلب تلقائياً عند النهاية.` };
+  }
   if (lastCheck && lastCheck.state === 'downloaded') {
     return { ok: true, ...lastCheck, message: `التنزيل اكتمل (إصدار ${lastCheck.remote}) — أعد التشغيل للتثبيت.` };
   }
@@ -99,7 +111,13 @@ async function checkNow() {
       resolve({ ok: false, state: 'timeout', local: app.getVersion(), remote: null,
         message: 'انتهت مهلة الفحص — تحقّق من الاتصال بالإنترنت ثم أعد المحاولة.' });
     }, CHECK_TIMEOUT_MS);
-    const onAvailable = (info) => { detach(); resolve({ ok: true, state: 'available', local: app.getVersion(), remote: info && info.version, message: `يوجد إصدار جديد ${info && info.version}.` }); };
+    // الفحص اليدوي يجب أن يُنزّل فعلاً: المستمع التلقائي مقموع هنا، فالاستدعاء الصريح هو
+    // ما يفتح نافذة «تنزيل وتحديث». بدونه يعلن البرنامج وجود تحديث ثم يصمت — وهو الخطأ الذي كان.
+    const onAvailable = (info) => {
+      detach();
+      resolve({ ok: true, state: 'available', local: app.getVersion(), remote: info && info.version, message: `يوجد إصدار جديد ${info && info.version}.` });
+      promptDownload(info);
+    };
     const onNotAvailable = () => { detach(); resolve({ ok: true, state: 'current', local: app.getVersion(), remote: app.getVersion(), message: 'أنت على أحدث إصدار.' }); };
     const onError = (err) => { detach(); resolve({ ok: false, state: 'error', local: app.getVersion(), remote: null, message: String((err && err.message) || err) }); };
     function detach() {
@@ -120,7 +138,7 @@ async function checkNow() {
 }
 
 function status() {
-  return { packaged: app.isPackaged, version: app.getVersion(), name: app.getName(), lastCheck };
+  return { packaged: app.isPackaged, version: app.getVersion(), name: app.getName(), downloading, lastCheck };
 }
 
 module.exports = { initAutoUpdater, checkNow, status, promptInstall };
