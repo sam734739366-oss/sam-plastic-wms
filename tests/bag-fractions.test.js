@@ -7,9 +7,9 @@ const { setDb } = require('../src/db');
 const { getBalance } = require('../src/stock');
 const templates = require('../src/print/templates');
 
-// صنف 1: إنتاج تام مربوط بأكياس (id 3) — كيس = 100 حبة
-// صنف 2: إنتاج تام بلا ربط أكياس
-// صنف 3: صنف الأكياس الفارغة (تُخصم منه)
+// صنف 1: إنتاج تام مربوط بأكياس (صنف الأكياس 3) — كيس = 100 حبة
+// صنف 2: إنتاج تام بلا ربط أكياس | صنف 3: الأكياس الفارغة (تُخصم منه)
+// صنف 4: خام يُشترى بكراتين (10000 حبة/كرتون) ليُصرف ثم يُستلم إنتاجه
 function makeDb() {
   const d = new DatabaseSync(':memory:');
   d.exec(fs.readFileSync(path.join(__dirname, '..', 'src', 'schema.sql'), 'utf8'));
@@ -22,6 +22,8 @@ function makeDb() {
     VALUES (?,?,?,?,?,?)`).run('003', 'عبوة بلا ربط', 2, 'عبوة', 52, 100);
   d.prepare(`INSERT INTO items (code, name, item_group, unit_name, weight_grams)
     VALUES (?,?,?,?,?)`).run('100', 'كيس فارغ', 1, 'كيس', 20);
+  d.prepare(`INSERT INTO items (code, name, item_group, unit_name, weight_grams, pieces_per_carton)
+    VALUES (?,?,?,?,?,?)`).run('X1', 'حبيبة PET', 1, 'كجم', 2.6, 10000);
   // الربط بعد إنشائه: عمود bag_item_id يشير إلى id 3 الذي لم يوجد بعد عند الإدراج الأول
   d.prepare('UPDATE items SET bag_item_id = 3 WHERE id = 1').run();
   d.prepare("INSERT INTO parties (name, type) VALUES (?,?)").run('عميل', 'customer');
@@ -35,157 +37,233 @@ function stubIpc(files) {
 }
 
 const salem = (db, id) => db.prepare('SELECT qty_salem FROM items WHERE id=?').get(id).qty_salem;
-const line = (db, id) => db.prepare('SELECT * FROM receive_items WHERE receive_permit_id=?').get(id);
+const head = (db, id) => db.prepare('SELECT * FROM production_receipts WHERE id=?').get(id);
+const movesOf = (db, id) => db.prepare("SELECT * FROM stock_moves WHERE doc_type='production' AND doc_id=? ORDER BY id").all(id);
 
 function stockBags(h, db, qty) {
   h['purchases:save'](null, { doc_number: 'PB-1', doc_date: '2026-10-19',
     items: [{ item_id: 3, warehouse_id: 1, quantity: qty, unit: 'حبة' }] }, 1);
 }
 
-function receiveOwn(db, h, opts = {}) {
-  const { id } = h['receives:save'](null, {
-    doc_number: opts.number || 'R-1', doc_date: '2026-10-20', source: opts.source || 'own',
-    party_id: opts.party_id || null,
-    items: [{ item_id: opts.item_id || 1, warehouse_id: 1, quantity: opts.bags, breaks: opts.breaks, unit: opts.unit || 'كيس', bucket: 'salem' }],
+// شراء كراتين خام المصنع وصرفها للإنتاج: يعيد السند والتصريح والكراتين
+let ownSeq = 0;
+function issueOwn(h, db, n = 1, over = {}) {
+  ownSeq += 1;
+  const purchaseNo = over.purchaseNo || `P-${ownSeq}`;
+  const issueNo = over.issueNo || `I-${ownSeq}`;
+  h['purchases:save'](null, { doc_number: purchaseNo, doc_date: '2026-10-19',
+    items: [{ item_id: 4, warehouse_id: 1, quantity: n, unit: 'كرتون', carton_prefix: over.prefix || `K${ownSeq}-` }] }, 1);
+  const purchaseId = db.prepare('SELECT id FROM purchases WHERE doc_number=?').get(purchaseNo).id;
+  const cartons = db.prepare('SELECT * FROM cartons WHERE purchase_id=? ORDER BY id').all(purchaseId);
+  const iss = h['issues:save'](null, { doc_number: issueNo, doc_date: '2026-10-19', source: 'own',
+    items: [{ item_id: 4, warehouse_id: 1, quantity: n, unit: 'كرتون',
+      carton_ids: cartons.map((c) => c.carton_number) }] }, 1);
+  return { issueId: iss.id, cartons };
+}
+
+// تصريح صرف من خام عميل: كراتين C- من سند خامه
+function issueCustomer(h, db, n = 1) {
+  h['tolling:receiptSave'](null, { doc_number: 'TR-1', doc_date: '2026-10-19', party_id: 1,
+    items: [{ item_id: 4, quantity: n * 10000, unit: 'حبة' }] }, 1);
+  const cartons = db.prepare("SELECT * FROM cartons WHERE source='customer' ORDER BY id").all();
+  const iss = h['issues:save'](null, { doc_number: 'I-C', doc_date: '2026-10-19', source: 'customer', party_id: 1,
+    items: [{ item_id: 4, warehouse_id: 1, quantity: n, unit: 'كرتون',
+      carton_ids: cartons.map((c) => c.carton_number) }] }, 1);
+  return { issueId: iss.id, cartons };
+}
+
+// سند استلام الإنتاج: الأكياس على رأسه والنتيجة على كراتينه
+function receiveOwn(h, db, opts = {}) {
+  const ctx = opts.ctx || issueOwn(h, db, 1);
+  const { id } = h['production:save'](null, {
+    doc_number: opts.number || 'R-1', doc_date: '2026-10-20', issue_permit_id: ctx.issueId,
+    fg_item_id: opts.itemId || 1, warehouse_id: 1, bags: opts.bags, breaks: opts.breaks,
+    cartons: [{ carton_id: (opts.carton || ctx.cartons[0]).id,
+      good_pieces: opts.good == null ? 10000 : opts.good,
+      defect_before_pieces: opts.before || 0, defect_after_pieces: opts.after || 0 }],
   }, 1);
-  return { id, row: line(db, id) };
+  return { id, row: head(db, id), ctx };
 }
 
 // ------------------------------------------------------------------ حساب الكسور
 
-test('الكمية بالحبات = مكتملة × حبات/كيس + كسور، والأكياس المستهلكة = مكتملة + كيس للكسور', () => {
+test('الكمية بالحبات = مكتملة × حبات/كيس + كسور، والأكياس المستهلكة = سقف القسمة', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production']);
   stockBags(h, db, 1000);
-  const { row } = receiveOwn(db, h, { bags: 80, breaks: 40 });
-  assert.equal(row.pieces, 8040);
+  const { row } = receiveOwn(h, db, { bags: 80, breaks: 40 });
+  assert.equal(row.bags, 80, 'العدد المدوّن يبقى عدد الأكياس المكتملة');
   assert.equal(row.breaks, 40);
-  assert.equal(row.bags_used, 81, '80 كيساً مكتملاً + كيس للكسور');
-  assert.equal(row.quantity, 80, 'الكمية المدونة تبقى عدد الأكياس المكتملة');
+  assert.equal(row.bags_used, 81, 'ceil((80×100+40)/100): كيس للكسور');
+  assert.equal(row.bag_item_id, 3, 'صنف الأكياس يُخزَّن في رأس السند لعكسه بدقة');
+  assert.equal(row.good_pieces, 10000, 'الأكياس لا تُخصم من حبات التام المستلَم');
+  assert.equal(salem(db, 3), 919, '1000 - 81');
 });
 
-test('بلا كسور ⇒ الأكياس المستهلكة = عدد الأكياس، والحبات مضروب صحيح', () => {
+test('بلا كسور ⇒ الأكياس المستهلكة = عدد الأكياس', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production']);
   stockBags(h, db, 1000);
-  const { row } = receiveOwn(db, h, { bags: 80, breaks: 0 });
-  assert.equal(row.pieces, 8000);
+  const { row } = receiveOwn(h, db, { bags: 80, breaks: 0 });
+  assert.equal(row.breaks, 0);
   assert.equal(row.bags_used, 80);
+  assert.equal(salem(db, 3), 920);
 });
 
 test('كسور تساوي أو تتجاوز حبات الكيس تُدمج في أكياس كاملة بدل أن تضيع', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production']);
   stockBags(h, db, 1000);
-  const { row } = receiveOwn(db, h, { bags: 2, breaks: 250 }); // 450 حبة
-  assert.equal(row.pieces, 450);
+  const { row, id } = receiveOwn(h, db, { bags: 2, breaks: 250 }); // 450 حبة
+  assert.equal(row.bags, 2);
+  assert.equal(row.breaks, 250);
   assert.equal(row.bags_used, 5, 'ceil(450/100) = 5');
-  assert.equal(salem(db, 1), 450);
+  assert.equal(salem(db, 3), 995);
+  assert.equal(salem(db, 1), 10000, 'سلّة التام المستلَم لا تتأثر بالتغليف');
+  assert.equal(movesOf(db, id)[1].qty_out_pieces, 5);
 });
 
-test('الاستلام بوحدة غير الكيس لا يقبل كسوراً برسالة واضحة', () => {
+test('كسور أو أكياس بصنف نهائي بلا «حبات/كيس» تُرفض برسالة تدل على العلاج', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
-  assert.throws(() => receiveOwn(db, h, { bags: 5, breaks: 10, unit: 'عبوة' }), /الكسور تُحسب مع وحدة/);
+  const h = stubIpc(['purchases', 'issues', 'production']);
+  stockBags(h, db, 1000);
+  db.prepare(`INSERT INTO items (code, name, item_group, unit_name, weight_grams)
+    VALUES ('009','صنف بلا كيس',2,'عبوة',10)`).run();
+  assert.throws(() => receiveOwn(h, db, { itemId: 5, bags: 5, breaks: 10 }), /عدد القطع في الكيس/);
+  assert.throws(() => receiveOwn(h, db, { itemId: 5, bags: 5 }), /عدد القطع في الكيس/);
+  assert.equal(salem(db, 5), 0, 'لم يُسجَّل السند أصلاً');
+  assert.equal(salem(db, 3), 1000, 'ولا مسّت الأكياس');
 });
 
-test('صنف بلا «حبات/كيس» يُرفض عند وحدة الكيس برسالة تدل على العلاج', () => {
+test('أكياس تتجاوز التام السليم مرفوضة: التغليف فرع من المستلَم لا أصل له', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
-  db.prepare("INSERT INTO items (code, name, item_group, unit_name, weight_grams) VALUES ('009','صنف بلا كيس',2,'عبوة',10)").run();
-  assert.throws(() => receiveOwn(db, h, { item_id: 4, bags: 5, breaks: 0 }), /عدد القطع في الكيس/);
+  const h = stubIpc(['purchases', 'issues', 'production']);
+  stockBags(h, db, 1000);
+  assert.throws(() => receiveOwn(h, db, { bags: 101, breaks: 0, good: 10000 }), /تتجاوز/);
+  assert.equal(salem(db, 1), 0);
+  assert.equal(salem(db, 3), 1000);
 });
 
 // ------------------------------------------------------------------ خصم الأكياس
 
 test('استلام إنتاج المصنع يخصم الأكياس المستهلكة من رصيد صنف الأكياس', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production']);
   stockBags(h, db, 1000);
-  const { id, row } = receiveOwn(db, h, { bags: 80, breaks: 40 });
-  assert.equal(row.bag_item_id, 3, 'يُخزَّن ربط الكيس في السطر لعكسه بدقة لاحقاً');
+  const { id, row } = receiveOwn(h, db, { bags: 80, breaks: 40 });
+  assert.equal(row.bag_item_id, 3);
   assert.equal(salem(db, 3), 919, '1000 - 81');
-  assert.equal(salem(db, 1), 8040, 'سلّة الصنف المستلم');
-  const mv = db.prepare("SELECT item_id, qty_in_pieces, qty_out_pieces, bucket FROM stock_moves WHERE doc_type='receive' AND doc_id=? ORDER BY id").all(id);
+  assert.equal(salem(db, 1), 10000, 'سلّة الصنف المستلم');
+  const mv = movesOf(db, id);
   assert.equal(mv.length, 2);
-  assert.deepEqual([mv[0].item_id, mv[0].qty_in_pieces], [1, 8040]);
+  assert.deepEqual([mv[0].item_id, mv[0].qty_in_pieces, mv[0].bucket], [1, 10000, 'salem']);
   assert.deepEqual([mv[1].item_id, mv[1].qty_out_pieces, mv[1].bucket], [3, 81, 'salem']);
+  assert.match(mv[1].notes, /استهلاك أكياس لتعبئة 002/);
+  // الثبات: العدّاد = صافي الحركات لكل صنف × سلة
+  const net = db.prepare(`SELECT item_id, bucket,
+      COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n
+    FROM stock_moves GROUP BY item_id, bucket`).all();
+  for (const it of db.prepare('SELECT * FROM items').all()) {
+    for (const key of ['salem', 'talef', 'muharraz']) {
+      const r = net.find((x) => x.item_id === it.id && x.bucket === key);
+      assert.equal(r ? r.n : 0, Number(it[`qty_${key}`]) || 0, `سلة ${key} للصنف ${it.code}`);
+    }
+  }
 });
 
-test('صنف غير مربوط بأكياس: يُدوَّن عدد الأكياس بلا أي خصم', () => {
+test('صنف غير مربوط بأكياس: تدوين الأكياس مرفوض برسالة الربط', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production']);
   stockBags(h, db, 1000);
-  const { row } = receiveOwn(db, h, { item_id: 2, bags: 10, breaks: 5 });
-  assert.equal(row.bags_used, 11);
-  assert.equal(row.bag_item_id, null);
+  assert.throws(() => receiveOwn(h, db, { itemId: 2, bags: 10, breaks: 5 }), /غير مربوط بصنف أكياس/);
   assert.equal(salem(db, 3), 1000, 'لم يُمسّ رصيد الأكياس');
+  assert.equal(salem(db, 2), 0, 'ولم يُسجَّل السند');
+  // بلا أكياس إطلاقاً السند يمرّ
+  const { row } = receiveOwn(h, db, { itemId: 2, number: 'R-2' });
+  assert.equal(row.bags_used, 0);
+  assert.equal(row.bag_item_id, null);
 });
 
-test('رصيد الأكياس غير كافٍ ⇒ رفض المستند وعدم تحريك سلّة الإنتاج', () => {
+test('رصيد الأكياس غير كافٍ ⇒ رفض السند وعدم تحريك سلّة الإنتاج', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production']);
   stockBags(h, db, 5);
-  assert.throws(() => receiveOwn(db, h, { bags: 80, breaks: 40 }), /رصيد الأكياس غير كافٍ/);
+  assert.throws(() => receiveOwn(h, db, { bags: 80, breaks: 40 }), /رصيد الأكياس غير كافٍ/);
   assert.equal(salem(db, 1), 0, 'لم يُسجَّل الاستلام أصلاً');
   assert.equal(salem(db, 3), 5);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM production_receipts').get().c, 0);
 });
 
-test('تعديل المستند يعكس الأكياس القديمة ويخصم الجديدة بلا ازدواج', () => {
+test('تعديل السند يعكس الأكياس القديمة ويخصم الجديدة بلا ازدواج', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production']);
   stockBags(h, db, 1000);
-  const { id } = receiveOwn(db, h, { bags: 80, breaks: 40 });   // −81
+  const { id, ctx } = receiveOwn(h, db, { bags: 80, breaks: 40 });   // −81
   assert.equal(salem(db, 3), 919);
-  h['receives:save'](null, {
-    id, doc_number: 'R-1', doc_date: '2026-10-20', source: 'own',
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 80, breaks: 0, unit: 'كيس', bucket: 'salem' }],
-  }, 1);
+  h['production:save'](null, { id, doc_number: 'R-1', doc_date: '2026-10-20', issue_permit_id: ctx.issueId,
+    fg_item_id: 1, warehouse_id: 1, bags: 80, breaks: 0,
+    cartons: [{ carton_id: ctx.cartons[0].id, good_pieces: 10000, defect_before_pieces: 0, defect_after_pieces: 0 }] }, 1);
   assert.equal(salem(db, 3), 920, '1000 - 80: رُدّت 81 ثم خُصمت 80');
-  const r = line(db, id);
-  assert.equal(r.pieces, 8000);
+  assert.equal(salem(db, 1), 10000, 'أثر التام طُبّق مرة واحدة');
+  const r = head(db, id);
   assert.equal(r.bags_used, 80);
-  assert.equal(db.prepare('SELECT COUNT(*) c FROM receive_items').get().c, 1, 'سطر واحد بعد التعديل');
+  assert.equal(r.breaks, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM production_receipts').get().c, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM production_receipt_cartons WHERE receipt_id=?').get(id).c, 1,
+    'سطر كرتون واحد بعد التعديل');
+  // عكس الأكياس لا يُطبّق مرتين: الحركة الأصلية + حركتها المعكوسة ثم الجديدة
+  const bagMoves = movesOf(db, id).filter((m) => m.item_id === 3);
+  assert.equal(bagMoves.reduce((s, m) => s + (m.qty_in_pieces || 0) - (m.qty_out_pieces || 0), 0), -80,
+    'صافي حركات الأكياس = الخصم الجديد وحده');
 });
 
-test('إلغاء المستند يُرجع الأكياس إلى مخزنها ويحذف أثر الإنتاج', () => {
+test('حذف السند يُرجع الأكياس إلى مخزنها ويمحى أثر الإنتاج', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production']);
   stockBags(h, db, 1000);
-  const { id } = receiveOwn(db, h, { bags: 80, breaks: 40 });
-  h['receives:void'](null, id, 1);
+  const { id } = receiveOwn(h, db, { bags: 80, breaks: 40 });
+  const res = h['production:delete'](null, id, 1);
+  assert.equal(res.ok, true);
   assert.equal(salem(db, 3), 1000, 'عودة كاملة');
   assert.equal(salem(db, 1), 0);
-  const net = db.prepare("SELECT COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n FROM stock_moves WHERE doc_type='receive' AND doc_id=?").get(id).n;
-  assert.equal(net, 0, 'حركات الإنتاج صافية الصفر');
+  assert.equal(movesOf(db, id).length, 0, 'حركات السند مُمحية لا معكوسة بصفوف');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM production_receipts WHERE id=?').get(id).c, 0);
+  assert.equal(getBalance(db, 3, 1).qty_salem, 1000);
 });
 
 test('خام العميل يخصم الأكياس كذلك — فهي ملك المصنع بلا النظر عن مالك الخام', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production', 'tolling', 'scrap']);
   stockBags(h, db, 1000);
-  const { row } = receiveOwn(db, h, { bags: 30, breaks: 10, source: 'customer', party_id: 1 });
+  const ctx = issueCustomer(h, db, 1);
+  const { id, row } = receiveOwn(h, db, { bags: 30, breaks: 10, ctx, number: 'R-C' });
   assert.equal(row.bags_used, 31);
   assert.equal(row.bag_item_id, 3, 'الخصم يسري على خام العميل أيضًا');
   assert.equal(salem(db, 3), 969, '1000 - 31');
   assert.equal(salem(db, 1), 0, 'أما إنتاج خام العميل فلا يدخل مخزون المصنع');
-  const mv = db.prepare("SELECT item_id, qty_in_pieces, qty_out_pieces FROM stock_moves WHERE doc_type='receive'").all();
+  const mv = movesOf(db, id);
   assert.equal(mv.length, 1, 'حركة واحدة: استهلاك الأكياس فقط');
   assert.deepEqual([mv[0].item_id, mv[0].qty_out_pieces], [3, 31]);
+  assert.equal(salem(db, 4), 0, 'خام العميل لا يمسّ سليم المصنع');
+  // وحذفه يُرجع الأكياس
+  h['production:delete'](null, id, 1);
+  assert.equal(salem(db, 3), 1000);
 });
 
-test('تبديل المصدر من مصنع إلى عميل لا يغيّر استهلاك الأكياس', () => {
+test('المصدر موروث من التصريح: استهلاك الأكياس لا يتغيّر بين خام المصنع وخام العميل', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'receives']);
+  const h = stubIpc(['purchases', 'issues', 'production', 'tolling', 'scrap']);
   stockBags(h, db, 1000);
-  const { id } = receiveOwn(db, h, { bags: 30, breaks: 10 });
+  const own = receiveOwn(h, db, { bags: 30, breaks: 10 });
   assert.equal(salem(db, 3), 969);
-  h['receives:save'](null, {
-    id, doc_number: 'R-1', doc_date: '2026-10-20', source: 'customer', party_id: 1,
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 30, breaks: 10, unit: 'كيس', bucket: 'salem' }],
-  }, 1);
-  assert.equal(salem(db, 3), 969, 'عُكس القديم ثم طُبّق الجديد بالكمية نفسها');
-  assert.equal(line(db, id).bag_item_id, 3);
+  assert.equal(own.row.source, 'own');
+  assert.equal(own.row.party_id, null);
+  const cust = receiveOwn(h, db, { bags: 30, breaks: 10, number: 'R-2', ctx: issueCustomer(h, db, 1) });
+  assert.equal(salem(db, 3), 938, '31 كيساً في كل سند بلا نظر للمصدر');
+  assert.equal(cust.row.source, 'customer', 'المصدر من التصريح لا من الواجهة');
+  assert.equal(cust.row.party_id, 1);
+  assert.equal(cust.row.bag_item_id, 3);
+  assert.equal(head(db, own.id).bags_used, 31);
 });
 
 test('ربط صنف الأكياس بنفسه يُرفض، وربط غير موجود يُرفض', () => {
@@ -201,13 +279,19 @@ test('ربط صنف الأكياس بنفسه يُرفض، وربط غير مو�
 
 // ------------------------------------------------------------------ الطباعة
 
-const doc = { doc_number: 'R-1', doc_date: '2026-10-20', notes: '',
-  items: [{ code: '002', name: 'عبوة', warehouse_name: 'التام', quantity: 80, unit: 'كيس', bucket: 'salem', pieces: 8040, weight_kg: 418 }],
-  machine_name: 'م1', shift_name: 'صباحية' };
+const doc = {
+  doc_number: 'R-1', doc_date: '2026-10-20', notes: '', source: 'own', issue_number: 'I-1',
+  fg_code: '002', fg_name: 'عبوة 5 لتر', unit_name: 'عبوة', warehouse_name: 'التام',
+  issued_pieces: 10040, good_pieces: 10000, defect_before_pieces: 40, defect_after_pieces: 0,
+  total_pieces: 10040, variance_pieces: 0, surplus_pieces: 0, bags_used: 81,
+  cartons: [{ carton_number: 'K-1', raw_code: 'X1', raw_name: 'حبيبة PET', carton_pieces: 10040,
+    good_pieces: 10000, defect_before_pieces: 40, defect_after_pieces: 0 }],
+  machine_name: 'م1', shift_name: 'صباحية',
+};
 const base = { factory_name: 'سام بلاستيك', currency: 'YER', doc_page_size: 'A5' };
 
 test('ترويسة الطباعة تحمل اسم التطبيق ورقم الهاتف في شريط ثابت يُعاد على كل صفحة', () => {
-  const html = templates.receiveTemplate(doc, { ...base, factory_phone: '0551234567' });
+  const html = templates.productionReceiptTemplate(doc, { ...base, factory_phone: '0551234567' });
   assert.match(html, /<div class="lhead"><span class="brand">سام بلاستيك<\/span>/);
   assert.match(html, /<span class="tel">0551234567<\/span>/);
   // الثبّت هو ما يجعل Chromium يعيد الرسم على كل صفحة فيزيائية عند تقاطع المستند
@@ -217,30 +301,36 @@ test('ترويسة الطباعة تحمل اسم التطبيق ورقم اله
   assert.match(html, /thead \{ display: table-header-group/);   // رؤوس الأعمدة تتكرر هي الأخرى
 });
 
-test('عمود الكسور يظهر في قالب الاستلام مثل الشاشة، ومتجره «—» لغير الكيس', () => {
-  const bagged = { ...doc, items: [{ code: '002', name: 'عبوة', warehouse_name: 'التام', quantity: 7,
-    unit: 'كيس', bucket: 'salem', pieces: 1761, weight_kg: 91.5, breaks: 11, bags_used: 8 }] };
-  const html = templates.receiveTemplate(bagged, base);
-  assert.match(html, /<th>#<\/th><th>الصنف<\/th><th>المخزن<\/th><th>الكمية<\/th><th>كسور<\/th>/);
-  assert.match(html, /<td>7<\/td><td>11<\/td><td>كيس<\/td>/);
-  assert.match(html, /الأكياس المستهلكة للتعبئة: <b>8<\/b> كيس/);
+test('قالب سند الإنتاج يطبع نتيجة كل كرتون والفارق والأكياس المستهلكة', () => {
+  const html = templates.productionReceiptTemplate(doc, base);
+  assert.match(html, /<th>#<\/th><th>الكرتون<\/th><th>الخام<\/th><th>حبات الكرتون<\/th><th>سليم<\/th><th>تالف قبل<\/th><th>تالف بعد<\/th>/);
+  assert.match(html, /<td>1<\/td><td>K-1<\/td>/, 'سطر الكرتون بقيمتيه');
+  assert.match(html, /<td>10,040<\/td><td>10,000<\/td><td>40<\/td><td>0<\/td>/);
+  assert.match(html, /الأكياس المستهلكة<\/td><td><b>81<\/b>/, 'الأكياس من رأس السند');
+  assert.match(html, /<b>تسوية مطابقة<\/b>/, 'الحالة تُقرأ من الفارق');
+  assert.match(html, /تصريح الصرف/);
 
-  const loose = { ...doc, items: [{ code: '002', name: 'عبوة', warehouse_name: 'التام', quantity: 500,
-    unit: 'عبوة', bucket: 'salem', pieces: 500, weight_kg: 26, breaks: 0, bags_used: 0 }] };
-  const html2 = templates.receiveTemplate(loose, base);
-  assert.match(html2, /<td>500<\/td><td>—<\/td><td>عبوة<\/td>/, 'لا كسور لغير وحدة الكيس');
-  assert.doesNotMatch(html2, /الأكياس المستهلكة/, 'ولا سطر أكياس حين لا استهلاك');
+  const shortDoc = { ...doc, variance_pieces: 40, total_pieces: 10000, issued_pieces: 10040, bags_used: 0 };
+  const html2 = templates.productionReceiptTemplate(shortDoc, base);
+  assert.match(html2, /<b>عجز 40<\/b>/);
+  assert.match(html2, /<b>عجز تسوية<\/b>/);
+  assert.match(html2, /الأكياس المستهلكة<\/td><td><b>0<\/b>/, 'بلا تغليف = صفر معلن لا سطر مخفي');
+
+  const overDoc = { ...doc, variance_pieces: -60, surplus_pieces: 60, good_pieces: 10060, total_pieces: 10100 };
+  const html3 = templates.productionReceiptTemplate(overDoc, base);
+  assert.match(html3, /<b>فائض 60<\/b>/);
+  assert.match(html3, /يُضاف للتام السليم<\/td><td><b>60<\/b>/);
 });
 
 test('بلا هاتف لا تُرسم خانة فارغة، ولا يظهر «undefined»', () => {
-  const html = templates.receiveTemplate(doc, base);
+  const html = templates.productionReceiptTemplate(doc, base);
   assert.doesNotMatch(html, /class="tel"/);
   assert.match(html, /<span class="brand">سام بلاستيك<\/span>/);
   assert.doesNotMatch(html, /undefined|null/);
 });
 
 test('التذييل الديناميكي يرسم المواضع الثلاثة ويُهمل الفارغ منها', () => {
-  const html = templates.receiveTemplate(doc, {
+  const html = templates.productionReceiptTemplate(doc, {
     ...base, footer_right: 'سام بلاستيك — factory', footer_center: 'شكراً لتعاملكم معنا', footer_left: '',
   });
   assert.match(html, /<div class="foot">/);
@@ -256,7 +346,7 @@ test('بلا تذييل مُعدَّ لا يظهر شريط التذييل إط�
 });
 
 test('نصوص التذييل تُهرَّب من HTML مثل بقية الحقول', () => {
-  const html = templates.receiveTemplate(doc, { ...base, footer_center: '<img src=x onerror=alert(1)>' });
+  const html = templates.productionReceiptTemplate(doc, { ...base, footer_center: '<img src=x onerror=alert(1)>' });
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /&lt;img/);
 });
@@ -268,70 +358,41 @@ test('قوالب التقارير تمرر الإعدادات فتظهر الع�
   assert.match(html, /<span class="fl">صفحة 1<\/span>/);
 });
 
-test('قالب نتيجة الإنتاج يحمل الترويسة والتذييل معاً', () => {
-  const html = templates.productionTemplate(
-    { doc_number: 'K-1', doc_date: '2026-10-20', carton_number: 'C-1', pieces: 5000, good_pieces: 4500,
-      defect_before: 300, defect_after: 200, notes: '', item_name: 'عبوة', issue_number: 'I-1', machine_name: 'م1', shift_name: 'ص' },
+test('قالب سند الإنتاج يحمل الترويسة والتذييل معاً', () => {
+  const html = templates.productionReceiptTemplate(
+    { ...doc, doc_number: 'K-1', source: 'customer', party_name: 'عميل' },
     { ...base, factory_phone: '999', footer_center: 'التوقيع' });
   assert.match(html, /class="brand"/);
   assert.match(html, /<span class="tel">999<\/span>/);
   assert.match(html, /<span class="fc">التوقيع<\/span>/);
+  assert.match(html, /خام العميل — عميل \(عهدة\)/, 'المصدر والعميل مطبوعان في السند');
 });
 
-// ------------------------------------------------------------------ الترقية
+// ------------------------------------------------------------------ المخطط
 
-test('ترقية قاعدة قديمة: أعمدة الكسور والأكياس مع ترحيل الاستلام القديم بوحدة الكيس', () => {
-  const { migrate } = require('../src/db');
+test('مخطط v2: رأس سند الإنتاج يحمل الأكياس وكسورها وصنفها بقيم افتراضية', () => {
   const d = new DatabaseSync(':memory:');
-  d.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, full_name TEXT, password_hash TEXT, role TEXT, created_at TEXT);
-    CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, name TEXT, item_group INTEGER DEFAULT 2, unit_name TEXT DEFAULT 'حبة', weight_grams REAL, pieces_per_carton INTEGER, pieces_per_shadda INTEGER, pieces_per_bag INTEGER, qty_salem INTEGER DEFAULT 0, qty_talef INTEGER DEFAULT 0, qty_muharraz INTEGER DEFAULT 0, opening_warehouse_id INTEGER, service_price REAL, is_recycled INTEGER DEFAULT 0, brand TEXT, size_label TEXT, bale_size TEXT, bale_condition TEXT, bale_mixed INTEGER DEFAULT 0, notes TEXT, created_at TEXT DEFAULT (datetime('now','localtime')));
-    CREATE TABLE parties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, type TEXT, phone TEXT, address TEXT, notes TEXT, created_at TEXT);
-    CREATE TABLE warehouses (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, location TEXT DEFAULT 'داخل المصنع', notes TEXT, created_at TEXT);
-    CREATE TABLE machines (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, notes TEXT);
-    CREATE TABLE shifts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, notes TEXT);
-    CREATE TABLE purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, party_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE purchase_items (id INTEGER PRIMARY KEY AUTOINCREMENT, purchase_id INTEGER, item_id INTEGER, warehouse_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, unit_price REAL, total_price REAL, notes TEXT);
-    CREATE TABLE cartons (id INTEGER PRIMARY KEY AUTOINCREMENT, carton_number TEXT UNIQUE, item_id INTEGER, purchase_id INTEGER, pieces INTEGER, status TEXT DEFAULT 'in_stock', issue_date TEXT, issue_permit_id INTEGER, notes TEXT);
-    CREATE TABLE issue_permits (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, machine_id INTEGER, shift_id INTEGER, receiver_name TEXT, source TEXT DEFAULT 'own', party_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE issue_items (id INTEGER PRIMARY KEY AUTOINCREMENT, issue_permit_id INTEGER, item_id INTEGER, warehouse_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, carton_ids TEXT, notes TEXT);
-    CREATE TABLE production_results (id INTEGER PRIMARY KEY AUTOINCREMENT, carton_id INTEGER, issue_permit_id INTEGER, machine_id INTEGER, shift_id INTEGER, result_date TEXT, good_pieces INTEGER DEFAULT 0, defect_before INTEGER DEFAULT 0, defect_after INTEGER DEFAULT 0, notes TEXT, created_by INTEGER, created_at TEXT);
-    CREATE TABLE receive_permits (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, machine_id INTEGER, shift_id INTEGER, source TEXT DEFAULT 'own', party_id INTEGER, issue_permit_id INTEGER, receiver_name TEXT, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE receive_items (id INTEGER PRIMARY KEY AUTOINCREMENT, receive_permit_id INTEGER, item_id INTEGER, warehouse_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, notes TEXT, bucket TEXT DEFAULT 'salem');
-    CREATE TABLE invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, party_id INTEGER, invoice_type TEXT, driver_name TEXT, car_number TEXT, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE invoice_items (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_id INTEGER, item_id INTEGER, warehouse_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, unit_price REAL, total_price REAL, notes TEXT);
-    CREATE TABLE exit_permits (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, party_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE exit_items (id INTEGER PRIMARY KEY AUTOINCREMENT, exit_permit_id INTEGER, item_id INTEGER, warehouse_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, notes TEXT);
-    CREATE TABLE customer_raw_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, party_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE customer_raw_items (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id INTEGER, item_id INTEGER, boxes INTEGER, pieces_per_box INTEGER, pieces INTEGER, weight_kg REAL, notes TEXT);
-    CREATE TABLE customer_deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, party_id INTEGER, invoice_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE customer_delivery_items (id INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id INTEGER, item_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, notes TEXT);
-    CREATE TABLE scrap_movements (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, item_id INTEGER, disposition TEXT, warehouse_id INTEGER, party_id INTEGER, pieces INTEGER, weight_kg REAL, price REAL, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE sales_returns (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, party_id INTEGER, invoice_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE sales_return_items (id INTEGER PRIMARY KEY AUTOINCREMENT, return_id INTEGER, item_id INTEGER, warehouse_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, notes TEXT);
-    CREATE TABLE purchase_returns (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, party_id INTEGER, purchase_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE purchase_return_items (id INTEGER PRIMARY KEY AUTOINCREMENT, return_id INTEGER, item_id INTEGER, warehouse_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, notes TEXT);
-    CREATE TABLE transfers (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, from_warehouse_id INTEGER, to_warehouse_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE transfer_items (id INTEGER PRIMARY KEY AUTOINCREMENT, transfer_id INTEGER, item_id INTEGER, quantity REAL, unit TEXT, pieces INTEGER, weight_kg REAL, notes TEXT);
-    CREATE TABLE stock_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_type TEXT, doc_id INTEGER, doc_number TEXT, doc_date TEXT, item_id INTEGER, warehouse_id INTEGER, qty_in_pieces INTEGER DEFAULT 0, qty_out_pieces INTEGER DEFAULT 0, weight_in_kg REAL DEFAULT 0, weight_out_kg REAL DEFAULT 0, notes TEXT);
-    CREATE TABLE party_ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, party_id INTEGER, doc_type TEXT, doc_id INTEGER, doc_number TEXT, doc_date TEXT, side TEXT, amount REAL DEFAULT 0, cash_in REAL DEFAULT 0, cash_out REAL DEFAULT 0, notes TEXT);
-    CREATE TABLE payments (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, party_id INTEGER, direction TEXT, amount REAL DEFAULT 0, method TEXT, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, action TEXT, entity TEXT, entity_id INTEGER, before_json TEXT, after_json TEXT, at TEXT DEFAULT (datetime('now','localtime')));
-    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
-  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('admin','م','x','manager')").run();
-  d.prepare("INSERT INTO warehouses (name) VALUES ('رئيسي')").run();
-  d.prepare("INSERT INTO items (code, name, item_group, unit_name, weight_grams, pieces_per_bag) VALUES ('002','عبوة',2,'عبوة',52,100)").run();
-  d.prepare("INSERT INTO receive_permits (doc_number, doc_date, source, status) VALUES ('R-9','2026-01-01','own','active')").run();
-  d.prepare("INSERT INTO receive_items (receive_permit_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg) VALUES (1,1,1,25,'كيس',2500,130)").run();
-  d.prepare("INSERT INTO settings (key, value) VALUES ('currency','YER')").run();
-
   d.exec(fs.readFileSync(path.join(__dirname, '..', 'src', 'schema.sql'), 'utf8'));
-  migrate(d);
-
-  const r = d.prepare('SELECT * FROM receive_items').get();
-  assert.equal(r.breaks, 0);
-  assert.equal(r.bags_used, 25, 'قديم بوحدة الكيس: الأكياس المستهلكة = العدد المدون');
+  const cols = d.prepare('PRAGMA table_info(production_receipts)').all().map((c) => c.name);
+  for (const need of ['bags', 'breaks', 'bags_used', 'bag_item_id', 'issued_pieces', 'good_pieces',
+    'defect_before_pieces', 'defect_after_pieces', 'total_pieces', 'variance_pieces', 'surplus_pieces']) {
+    assert.ok(cols.includes(need), `عمود ${need} مفقود من رأس السند`);
+  }
+  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('a','a','x','manager')").run();
+  d.prepare('INSERT INTO warehouses (name) VALUES (?)').run('رئيسي');
+  d.prepare('INSERT INTO items (code, name, unit_name) VALUES (?,?,?)').run('002', 'عبوة', 'عبوة');
+  d.prepare("INSERT INTO issue_permits (doc_number, doc_date) VALUES ('I-1','2026-10-20')").run();
+  d.prepare(`INSERT INTO production_receipts (doc_number, doc_date, issue_permit_id, fg_item_id, warehouse_id)
+    VALUES ('R-1','2026-10-20',1,1,1)`).run();
+  const r = d.prepare('SELECT * FROM production_receipts WHERE id=1').get();
+  for (const k of ['bags', 'breaks', 'bags_used', 'issued_pieces', 'good_pieces', 'variance_pieces']) {
+    assert.equal(r[k], 0, `${k} يفتقر إلى صفر لا إلى null`);
+  }
   assert.equal(r.bag_item_id, null);
-  assert.deepEqual(d.prepare('PRAGMA table_info(items)').all().map(c => c.name).filter(n => n === 'bag_item_id'), ['bag_item_id']);
+  // السلة لا تعيش في بنود استلام بعد اليوم: لا جدول receive_items ولا عمود status
+  assert.equal(d.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name IN ('receive_items','receive_permits','production_results')").get().c, 0);
+  assert.deepEqual(d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE '%status TEXT%'")
+    .all().map((t) => t.name), ['cartons'], 'cartons.status الاستثناء الوحيد');
 });
 
 // الإعدادات: settings:save يمسح الجدول ويعيد الإدراج بما يُمرَّر — فالمفتاح الجديد يجب أن يبقى
@@ -348,7 +409,7 @@ test('إعدادات الهاتف والتذييل تدور بين الحفظ و
   assert.equal(s.footer_right, 'سام بلاستيك');
   assert.equal(s.footer_center, 'شكراً لتعاملكم');
   assert.equal(s.footer_left, 'صفحة 1');
-  const html = templates.receiveTemplate(doc, s);
+  const html = templates.productionReceiptTemplate(doc, s);
   assert.match(html, /<span class="tel">0500000000<\/span>/);
   assert.match(html, /<span class="fc">شكراً لتعاملكم<\/span>/);
 });

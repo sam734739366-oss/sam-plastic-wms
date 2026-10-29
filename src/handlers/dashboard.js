@@ -24,24 +24,25 @@ module.exports = function register(ipcMain) {
       FROM items`).get();
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    // كل مستند في الجدول موجود فعلاً: لا حالة «ملغى» في v2، فالمحذوف يُمحى صفّه معه
     const todayDocs = db.prepare(`SELECT
-      (SELECT COUNT(*) FROM purchases WHERE doc_date=? AND status='active') +
-      (SELECT COUNT(*) FROM issue_permits WHERE doc_date=? AND status='active') +
-      (SELECT COUNT(*) FROM receive_permits WHERE doc_date=? AND status='active') +
-      (SELECT COUNT(*) FROM invoices WHERE doc_date=? AND status='active') +
-      (SELECT COUNT(*) FROM exit_permits WHERE doc_date=? AND status='active') +
-      (SELECT COUNT(*) FROM transfers WHERE doc_date=? AND status='active') +
-      (SELECT COUNT(*) FROM scrap_movements WHERE doc_date=? AND status='active') +
-      (SELECT COUNT(*) FROM customer_raw_receipts WHERE doc_date=? AND status='active') +
-      (SELECT COUNT(*) FROM customer_deliveries WHERE doc_date=? AND status='active') c`)
+      (SELECT COUNT(*) FROM purchases WHERE doc_date=?) +
+      (SELECT COUNT(*) FROM issue_permits WHERE doc_date=?) +
+      (SELECT COUNT(*) FROM production_receipts WHERE doc_date=?) +
+      (SELECT COUNT(*) FROM invoices WHERE doc_date=?) +
+      (SELECT COUNT(*) FROM exit_permits WHERE doc_date=?) +
+      (SELECT COUNT(*) FROM transfers WHERE doc_date=?) +
+      (SELECT COUNT(*) FROM scrap_movements WHERE doc_date=?) +
+      (SELECT COUNT(*) FROM customer_raw_receipts WHERE doc_date=?) +
+      (SELECT COUNT(*) FROM customer_deliveries WHERE doc_date=?) c`)
       .get(todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr).c;
     const [from, to] = monthRange();
     const monthPurchases = db.prepare(`SELECT COALESCE(SUM(pi.total_price),0) t
       FROM purchase_items pi JOIN purchases p ON p.id=pi.purchase_id
-      WHERE p.status='active' AND p.doc_date BETWEEN ? AND ?`).get(from, to).t;
+      WHERE p.doc_date BETWEEN ? AND ?`).get(from, to).t;
     const monthSales = db.prepare(`SELECT COALESCE(SUM(ii.total_price),0) t
       FROM invoice_items ii JOIN invoices inv ON inv.id=ii.invoice_id
-      WHERE inv.status='active' AND inv.doc_date BETWEEN ? AND ?`).get(from, to).t;
+      WHERE inv.doc_date BETWEEN ? AND ?`).get(from, to).t;
     const pendingCartons = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE status='in_stock'`).get().c;
     const cash = ledger.cashBalance(db);
     const recv = ledger.receivables(db);
@@ -70,10 +71,10 @@ module.exports = function register(ipcMain) {
       const to = `${monthKey(d)}-31`;
       const purchases = db.prepare(`SELECT COALESCE(SUM(pi.total_price),0) t
         FROM purchase_items pi JOIN purchases p ON p.id=pi.purchase_id
-        WHERE p.status='active' AND p.doc_date BETWEEN ? AND ?`).get(from, to).t;
+        WHERE p.doc_date BETWEEN ? AND ?`).get(from, to).t;
       const sales = db.prepare(`SELECT COALESCE(SUM(ii.total_price),0) t
         FROM invoice_items ii JOIN invoices inv ON inv.id=ii.invoice_id
-        WHERE inv.status='active' AND inv.doc_date BETWEEN ? AND ?`).get(from, to).t;
+        WHERE inv.doc_date BETWEEN ? AND ?`).get(from, to).t;
       monthly.push({ label: AR_MONTHS[d.getMonth()], purchases, sales });
     }
     const buckets = db.prepare(`SELECT

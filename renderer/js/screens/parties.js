@@ -1,6 +1,6 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, renderTable, attachRowMenu, rowActions, openModal, esc, canWrite } from '../ui.js';
 
 const TYPE_NAMES = { supplier: 'مورد', customer: 'عميل', both: 'كلاهما' };
 const TYPE_TAG = { supplier: 'salem', customer: 'new', both: 'muharraz' };
@@ -10,11 +10,12 @@ register('parties', {
   async mount(el) {
     let rows = [];
     let currentType = '';
+    const writable = canWrite();
 
     el.innerHTML = `
       <div class="filters" id="filters"></div>
       <div class="toolbar">
-        <button class="btn primary" id="btn-add">+ إضافة طرف</button>
+        ${writable ? '<button class="btn primary" id="btn-add">+ إضافة طرف</button>' : '<span class="muted">وضع عرض فقط</span>'}
         <span class="spacer"></span>
         <button class="btn" id="btn-print">طباعة القائمة</button>
         <input id="f-search" placeholder="بحث بالاسم أو الهاتف…" style="width:230px">
@@ -37,7 +38,7 @@ register('parties', {
         await refresh();
       };
     });
-    el.querySelector('#btn-add').onclick = () => edit(null, refresh);
+    if (writable) el.querySelector('#btn-add').onclick = () => edit(null, refresh);
     el.querySelector('#f-search').addEventListener('input', renderTableData);
     el.querySelector('#btn-print').onclick = async () => {
       const q = (el.querySelector('#f-search')?.value || '').trim();
@@ -78,20 +79,24 @@ register('parties', {
 
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = filtered[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r) },
-          { label: 'تعديل', onClick: () => edit(r, refresh) },
-          { label: 'حذف', danger: true, onClick: async () => {
-            if (!(await confirmDialog(`حذف الطرف «${esc(r.name)}»؟`))) return;
+        return rowActions({
+          id: r.id,
+          view: () => view(r),
+          edit: () => edit(r, refresh),
+          del: async () => {
+            if (!(await confirmDialog(`حذف الطرف «${esc(r.name)}» نهائياً؟ لا يمكن التراجع عن الحذف.`))) return false;
             try {
               await api.invoke('parties:delete', r.id, currentUser().id);
               toast('تم الحذف', 'ok');
-              await refresh();
+              return true;
             } catch (err) {
               toast(String(err.message || err), 'err');
+              return false;
             }
-          } },
-        ];
+          },
+          reload: refresh,
+          readOnly: !writable,
+        });
       });
     }
 

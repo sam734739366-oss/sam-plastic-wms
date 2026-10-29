@@ -1,9 +1,27 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, applyBucketsDelta } = require('../stock');
+const { writeMoves, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber, nextCartonNumbers } = require('../docs');
+const docDelete = require('../docDelete');
 const ledger = require('../ledger');
+
+// فاتورة الشراء تُنتج كراتين، فالحذف محكوم بها: كرتونة صُرفت للإنتاج تعني أن أثرها
+// سار في سلسلة لا تعرف الفاتورة، فيُمنع الحذف حتى تُحذف السلسلة من آخرها.
+const PURCHASE_SPEC = {
+  table: 'purchases',
+  auditEntity: 'purchase',
+  docType: 'purchase',
+  ledgerType: 'purchase',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(total_price),0) t FROM purchase_items WHERE purchase_id=?').get(id).t,
+  deps: [
+    (db, id) => db.prepare(`SELECT carton_number FROM cartons WHERE purchase_id=? AND status != 'in_stock'`)
+      .all(id).map((r) => ({ label: 'كرتون مصروف للإنتاج', number: r.carton_number })),
+    (db, id) => db.prepare('SELECT doc_number FROM purchase_returns WHERE purchase_id=?')
+      .all(id).map((r) => ({ label: 'مرتجع شراء', number: r.doc_number })),
+  ],
+  beforeDelete: (db, id) => { db.prepare('DELETE FROM cartons WHERE purchase_id=?').run(id); },
+};
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('purchases:suggest', () => suggestNumber(getDb(), 'purchases'));
@@ -45,7 +63,7 @@ module.exports = function register(ipcMain) {
       let oldItems = [];
       if (id) {
         const issued = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE purchase_id=? AND status != 'in_stock'`).get(id).c;
-        if (issued > 0) throw new Error('يوجد كراتين من هذه الفاتورة صُرفت للإنتاج — ألغِ تصريح الصرف أولاً قبل التعديل');
+        if (issued > 0) throw new Error('يوجد كراتين من هذه الفاتورة صُرفت للإنتاج — احذف تصريح الصرف أولاً قبل التعديل');
         oldItems = db.prepare('SELECT * FROM purchase_items WHERE purchase_id=?').all(id);
         db.prepare('DELETE FROM purchase_items WHERE purchase_id=?').run(id);
         db.prepare('DELETE FROM cartons WHERE purchase_id=?').run(id);
@@ -91,23 +109,7 @@ module.exports = function register(ipcMain) {
     return { id };
   });
 
-  ipcMain.handle('purchases:void', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM purchases WHERE id=?').get(id);
-    if (!before) throw new Error('الفاتورة غير موجودة');
-    const issued = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE purchase_id=? AND status != 'in_stock'`).get(id).c;
-    if (issued > 0) throw new Error('يوجد كراتين من هذه الفاتورة صُرفت للإنتاج — ألغِ تصريح الصرف أولاً');
-    const returned = db.prepare(`SELECT COUNT(*) c FROM purchase_returns WHERE purchase_id=? AND status='active'`).get(id).c;
-    if (returned > 0) throw new Error('لا يمكن إلغاء الفاتورة — توجد مرتجعات نشطة عليها، ألغِ المرتجع أولاً');
-    const oldItems = db.prepare('SELECT * FROM purchase_items WHERE purchase_id=?').all(id);
-    withTransaction(db, () => {
-      db.prepare('DELETE FROM cartons WHERE purchase_id=?').run(id);
-      voidDoc(db, 'purchase', id, userId);
-      applyBucketsDelta(db, oldItems, -1);
-      ledger.voidDoc(db, 'purchase', id);
-      db.prepare(`UPDATE purchases SET status='void' WHERE id=?`).run(id);
-    });
-    audit(db, userId, 'void', 'purchase', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('purchases:impact', (e, id) => docDelete.impact(getDb(), PURCHASE_SPEC, id));
+
+  ipcMain.handle('purchases:delete', (e, id, userId) => docDelete.hardDelete(getDb(), PURCHASE_SPEC, id, userId));
 };

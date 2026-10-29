@@ -102,10 +102,12 @@ test('reports:movement computes running balance in date order', () => {
   assert.equal(rows[1].doc_type, 'invoice');
 });
 
-test('reports:production lists per-carton rows with accounted and variance', () => {
+test('reports:production lists per-carton rows and a receipt-level summary', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'issues', 'production', 'reports']);
   db.prepare('UPDATE items SET pieces_per_carton=100 WHERE id=1').run();
+  // تسمية وحدة واحدة للخام والتام في هذا الفيكستشن: تسمية التقرير تُقرأ من الصنف
+  db.prepare("UPDATE items SET unit_name='عبوة' WHERE id=2").run();
   const { id: purchaseId } = h['purchases:save'](null, {
     doc_number: 'P-1', doc_date: '2026-10-10', party_id: 1,
     items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'كرتون', carton_prefix: 'KR' }]
@@ -116,23 +118,42 @@ test('reports:production lists per-carton rows with accounted and variance', () 
     doc_number: 'I-1', doc_date: '2026-10-11', source: 'own',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'كرتون', carton_ids: cartons.map(c => c.carton_number) }]
   }, 1);
-  assert.equal(issueId > 0, true);
-  h['production:save'](null, {
-    carton_id: cartons[0].id, result_date: '2026-10-11',
-    good_pieces: 90, defect_before: 5, defect_after: 4
+  const save = (n, carton, good, before, after) => h['production:save'](null, {
+    doc_number: n, doc_date: '2026-10-11', issue_permit_id: issueId, fg_item_id: 2, warehouse_id: 1,
+    cartons: [{ carton_id: carton.id, good_pieces: good, defect_before_pieces: before, defect_after_pieces: after }],
   }, 1);
+  save('PR-1', cartons[0], 90, 5, 4);   // عجز 1
+  save('PR-2', cartons[1], 100, 10, 0); // فائض 10
   const data = h['reports:production'](null, { from: '2026-10-01', to: '2026-10-31' });
-  assert.equal(data.rows.length, 1);
+  assert.equal(data.rows.length, 2, 'سطر لكل كرتون لا لكل سند');
   const row = data.rows[0];
   assert.equal(row.carton_number, cartons[0].carton_number);
+  assert.equal(row.doc_number, 'PR-1');
+  assert.equal(row.fg_code, '005-001');
   assert.equal(row.carton_pieces, 100);
   assert.equal(row.accounted, 99);
-  assert.equal(row.variance, 1, 'الفارق = حبات الكرتون − (سليم + تالف قبل + تالف بعد)');
-  assert.equal(row.good_pieces_label, '90 حبة');
-  assert.equal(data.total_good, 90);
-  assert.equal(data.total_defect, 9);
-  assert.equal(data.total_variance, 1);
+  assert.equal(row.variance, 1, 'الفارق السطري = حبات الكرتون − (سليم + تالف قبل + تالف بعد)');
+  assert.equal(row.good_pieces_label, '90 عبوة');
+  assert.equal(row.accounted_label, '99 عبوة');
+  // الملخّص على مستوى السند: الفارق لا يُضاعف على أسطر الكراتين
+  assert.equal(data.receipts_count, 2);
+  assert.equal(data.total_issued, 200);
+  assert.equal(data.total_good, 190);
+  assert.equal(data.total_defect_before, 15);
+  assert.equal(data.total_defect_after, 4);
+  assert.equal(data.total_defect, 19);
+  assert.equal(data.total_shortage, 1);
+  assert.equal(data.total_surplus, 10);
+  assert.equal(data.total_shortage_label, '1 حبة');
+  assert.equal(Object.keys(row).some((k) => /weight|_kg/.test(k)), false, 'لا أعمدة وزن في تقارير v2');
   assert.equal(h['reports:production'](null, { from: '2026-11-01' }).rows.length, 0);
+  // حذف أحد السند يمحى أثره من التقرير لا أن يعلَّم
+  h['production:delete'](null, row.receipt_id, 1);
+  const after = h['reports:production'](null, {});
+  assert.equal(after.rows.length, 1);
+  assert.equal(after.receipts_count, 1);
+  assert.equal(after.total_shortage, 0);
+  assert.equal(after.total_surplus, 10);
 });
 
 test('reports:scrap lists active scrap rows with a source label', () => {

@@ -1,15 +1,16 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, renderTable, attachRowMenu, rowActions, openModal, esc, canWrite } from '../ui.js';
 
 register('warehouses', {
   title: 'المخازن',
   async mount(el) {
     let rows = [];
+    const writable = canWrite();
 
     el.innerHTML = `
       <div class="toolbar">
-        <button class="btn primary" id="btn-add">+ إضافة مخزن</button>
+        ${writable ? '<button class="btn primary" id="btn-add">+ إضافة مخزن</button>' : '<span class="muted">وضع عرض فقط</span>'}
         <span class="spacer"></span>
         <button class="btn" id="btn-print">طباعة القائمة</button>
       </div>
@@ -22,7 +23,7 @@ register('warehouses', {
       <div id="summary" class="summary-line"></div>
       <div id="table-wrap"></div>`;
 
-    el.querySelector('#btn-add').onclick = () => edit(null, refresh);
+    if (writable) el.querySelector('#btn-add').onclick = () => edit(null, refresh);
     el.querySelector('#btn-print').onclick = async () => {
       try {
         const settings = await api.invoke('settings:get');
@@ -49,20 +50,24 @@ register('warehouses', {
 
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = rows[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r) },
-          { label: 'تعديل', onClick: () => edit(r, refresh) },
-          { label: 'حذف', danger: true, onClick: async () => {
-            if (!(await confirmDialog(`حذف المخزن «${esc(r.name)}»؟`))) return;
+        return rowActions({
+          id: r.id,
+          view: () => view(r),
+          edit: () => edit(r, refresh),
+          del: async () => {
+            if (!(await confirmDialog(`حذف المخزن «${esc(r.name)}» نهائياً؟ لا يمكن التراجع عن الحذف.`))) return false;
             try {
               await api.invoke('warehouses:delete', r.id, currentUser().id);
               toast('تم الحذف', 'ok');
-              await refresh();
+              return true;
             } catch (e) {
               toast(String(e.message || e), 'err');
+              return false;
             }
-          } },
-        ];
+          },
+          reload: refresh,
+          readOnly: !writable,
+        });
       });
     }
 

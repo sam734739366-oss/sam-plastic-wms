@@ -1,6 +1,8 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, openModal, esc } from '../ui.js';
+import {
+  toast, implicationsDialog, renderTable, attachRowMenu, rowActions, openModal, esc, canWrite,
+} from '../ui.js';
 import { fmtMoney, today } from '../fmt.js';
 
 // سندات القبض والدفع: قبض = يحصل المصنع نقداً ويُخصم من ذمة العميل
@@ -8,17 +10,17 @@ import { fmtMoney, today } from '../fmt.js';
 register('payments', {
   title: 'سندات القبض والدفع',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const rows = await api.invoke('payments:list');
       el.innerHTML = `
-        <div class="toolbar"><button class="btn primary" id="btn-add">+ سند جديد</button></div>
-        <div class="help-card" style="margin-bottom:12px">سند القبض يُسجَّل عندما يدفع لك عميل نقداً (يقل رصيده الآجل ويزيد رصيد النقدية)، وسند الدفع عندما تدفع أنت لمورد نقداً (يقل رصيده الآجل وينقص من النقدية).</div>
+        <div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ سند جديد</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
+        <div class="help-card" style="margin-bottom:12px">سند القبض يُسجَّل عندما يدفع لك عميل نقداً (يقل رصيده الآجل ويزيد رصيد النقدية)، وسند الدفع عندما تدفع أنت لمورد نقداً (يقل رصيده الآجل وينقص من النقدية). حذف السند نهائي: يُمحى القيد من دفتر الأستاذ وتعود النقدية والذمة لما قبله.</div>
         <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
-      el.querySelector('#btn-add').onclick = () => form(null);
-      const active = rows.filter(r => r.status !== 'void');
-      const sumIn = active.filter(r => r.direction === 'in').reduce((a, r) => a + (Number(r.amount) || 0), 0);
-      const sumOut = active.filter(r => r.direction === 'out').reduce((a, r) => a + (Number(r.amount) || 0), 0);
+      if (writable) el.querySelector('#btn-add').onclick = () => form(null);
+      const sumIn = rows.filter(r => r.direction === 'in').reduce((a, r) => a + (Number(r.amount) || 0), 0);
+      const sumOut = rows.filter(r => r.direction === 'out').reduce((a, r) => a + (Number(r.amount) || 0), 0);
       el.querySelector('#summary').innerHTML =
         `عدد السندات: <b>${rows.length}</b> — إجمالي القبض: <b>${fmtMoney(sumIn)}</b> — إجمالي الدفع: <b>${fmtMoney(sumOut)}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
@@ -27,20 +29,19 @@ register('payments', {
         { key: 'party_name', label: 'الطرف', render: r => r.party_name || '—' },
         { key: 'direction', label: 'النوع', render: r => r.direction === 'in' ? '<span class="tag salem">قبض (وارد)</span>' : '<span class="tag talef">دفع (صادر)</span>' },
         { key: 'amount', label: 'المبلغ', render: r => fmtMoney(r.amount) },
-        { key: 'notes', label: 'ملاحظات', render: r => r.notes || '—' },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag new">نشط</span>' },
-        {
-          key: 'actions', label: '',
-          render: (r) => `<button class="btn mini" data-view="${r.id}">عرض</button>
-            <button class="btn mini" data-print="${r.id}">طباعة</button>
-            <button class="btn mini" data-edit="${r.id}">تعديل</button>
-            <button class="btn mini danger" data-void="${r.id}">إلغاء</button>`,
-        },
+        { key: 'notes', label: 'ملاحظات', render: r => esc(r.notes || '—') },
       ], rows);
-      el.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view(Number(b.dataset.view)));
-      el.querySelectorAll('[data-print]').forEach(b => b.onclick = () => printDoc(Number(b.dataset.print)));
-      el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => edit(Number(b.dataset.edit)));
-      el.querySelectorAll('[data-void]').forEach(b => b.onclick = () => voidDoc(Number(b.dataset.void)));
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => rowActions({
+        id: rows[ri].id,
+        entity: 'payments',
+        valueKind: 'money',
+        label: 'سند النقدية',
+        view: (id) => view(id),
+        print: (id) => printDoc(id),
+        edit: (id) => edit(id),
+        reload: load,
+        readOnly: !writable,
+      }));
     }
 
     async function printDoc(id) {
@@ -73,18 +74,6 @@ register('payments', {
         ]);
         if (!ok) return;
         form(doc);
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('payments:get', id);
-        if (!(await implicationsDialog('إلغاء سند', [
-          `سيُعكس أثر سند ${doc.direction === 'in' ? 'القبض' : 'الدفع'} ${esc(doc.doc_number)} على النقدية ورصيد الطرف.`,
-        ]))) return;
-        await api.invoke('payments:void', id, currentUser().id);
-        toast('تم إلغاء السند', 'ok');
-        await load();
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 

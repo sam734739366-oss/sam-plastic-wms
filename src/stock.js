@@ -91,17 +91,62 @@ function writeMoves(db, docType, docId, docNumber, docDate, rows, userId) {
   });
 }
 
-function voidDoc(db, docType, docId, userId) {
-  withTransaction(db, () => {
-    const old = db.prepare('SELECT * FROM stock_moves WHERE doc_type=? AND doc_id=?').all(docType, docId);
-    const rev = db.prepare(`INSERT INTO stock_moves
-      (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id,
-       qty_in_pieces, qty_out_pieces, weight_in_kg, weight_out_kg, bucket, notes)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
-    for (const o of old) rev.run(docType, docId, o.doc_number, o.doc_date, o.item_id, o.warehouse_id,
-      o.qty_out_pieces, o.qty_in_pieces, o.weight_out_kg, o.weight_in_kg, o.bucket || null, 'عكس حركة (إلغاء مستند)');
-    audit(db, userId, 'void', docType, docId, old, null);
-  });
+// ===== الحذف الفعلي (v2) =====
+// عكس أثر حركات مستند على عدّادات السلات. تُحسب الصافي لكل (صنف × سلة) لا القيمة المطلقة
+// لكل صف، لأن حركات التعديل تُخزَّن مع صفوف عكسها: الصافي هو الأثر الحقيقي،
+// والمطلقة كانت ستُضاعف العكس وتمحو رصيداً لم يمسّه المستند أصلاً.
+function revertMoves(db, rows, sign = -1) {
+  const byPair = new Map();
+  for (const r of rows) {
+    const net = (Number(r.qty_in_pieces) || 0) - (Number(r.qty_out_pieces) || 0);
+    if (!net) continue;
+    const bucket = ['salem', 'talef', 'muharraz'].includes(r.bucket) ? r.bucket : 'salem';
+    const key = `${r.item_id}:${bucket}`;
+    byPair.set(key, (byPair.get(key) || 0) + net);
+  }
+  const applied = [];
+  for (const [key, net] of byPair) {
+    const [itemId, bucket] = key.split(':');
+    const next = bucketsDelta(db, Number(itemId), { [bucket]: sign * net });
+    applied.push({ item_id: Number(itemId), bucket, pieces: sign * net, next });
+  }
+  return applied;
+}
+
+// أثر المستند بصيغة يقرأها المستخدم في نافذة التأكيد: صنف/سلّة/مخزن والاتجاه
+function docImpact(db, docType, docId) {
+  const rows = db.prepare(`SELECT sm.item_id, i.code, i.name, i.unit_name, sm.bucket, sm.warehouse_id,
+      w.name AS warehouse_name,
+      COALESCE(SUM(sm.qty_in_pieces),0) AS in_pieces,
+      COALESCE(SUM(sm.qty_out_pieces),0) AS out_pieces
+    FROM stock_moves sm
+    JOIN items i ON i.id = sm.item_id
+    JOIN warehouses w ON w.id = sm.warehouse_id
+    WHERE sm.doc_type=? AND sm.doc_id=?
+    GROUP BY sm.item_id, sm.bucket, sm.warehouse_id
+    ORDER BY i.code, sm.bucket, w.name`).all(docType, docId);
+  const bucketLabel = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' };
+  return rows.map((r) => {
+    const net = r.in_pieces - r.out_pieces;
+    const unit = r.unit_name || 'حبة';
+    return {
+      ...r,
+      net,
+      bucket_label: bucketLabel[r.bucket] || r.bucket,
+      text: `${r.code} — ${r.name} (${bucketLabel[r.bucket] || r.bucket}) في ${r.warehouse_name}: `
+        + (net >= 0 ? `+${net.toLocaleString('en-US')} ${unit}` : `${net.toLocaleString('en-US')} ${unit}`),
+    };
+  }).filter((r) => r.net !== 0);
+}
+
+// حذف المستند: يردّ العدّادات ثم يمحو حركاته. يُرجع ما رُدّ ليُعرض في التأكيد.
+function deleteDocStock(db, docType, docId, userId, opts = {}) {
+  const rows = db.prepare('SELECT * FROM stock_moves WHERE doc_type=? AND doc_id=?').all(docType, docId);
+  const impact = docImpact(db, docType, docId);
+  if (opts.revertBuckets !== false) revertMoves(db, rows, -1);
+  const removed = db.prepare('DELETE FROM stock_moves WHERE doc_type=? AND doc_id=?').run(docType, docId).changes;
+  audit(db, userId, 'delete', docType, docId, rows, null);
+  return { reverted: impact, removed_moves: removed };
 }
 
 function getBalance(db, itemId, warehouseId) {
@@ -118,4 +163,7 @@ function getBalance(db, itemId, warehouseId) {
     FROM stock_moves WHERE item_id=? AND warehouse_id=?`).get(itemId, warehouseId);
 }
 
-module.exports = { writeMoves, voidDoc, getBalance, bucketsDelta, applyBucketDelta, applySalemDelta, applyTalefDelta, applyBucketsDelta };
+module.exports = {
+  writeMoves, getBalance, bucketsDelta, applyBucketDelta, applySalemDelta, applyTalefDelta,
+  applyBucketsDelta, revertMoves, docImpact, deleteDocStock,
+};

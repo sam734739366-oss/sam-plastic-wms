@@ -21,9 +21,11 @@ function makeDb() {
   return d;
 }
 
-function stubIpc() {
+function stubIpc(...mods) {
   const handlers = {};
-  require('../src/handlers/tolling')({ handle: (ch, fn) => { handlers[ch] = fn; } });
+  for (const f of ['tolling', ...mods]) {
+    require(`../src/handlers/${f}`)({ handle: (ch, fn) => { handlers[ch] = fn; } });
+  }
   return handlers;
 }
 
@@ -83,9 +85,9 @@ test('tolling:deliverySave deducts balance and blocks overshoot', () => {
   }, 1), /أكبر من رصيد العميل/);
 });
 
-test('tolling:deliverySave creates linked blowing fee invoice with group-4 items', () => {
+test('تسليم مرتبط بفاتورة أجرة: لا تُحذف الفاتورة قبل التسليم، وحذف التسليم لا يمسّ الذمة', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc();
+  const h = stubIpc('sales');
   h['tolling:receiptSave'](null, {
     doc_number: '1', doc_date: '2026-10-18', party_id: 1,
     items: [{ item_id: 1, boxes: 10, pieces_per_box: 5000 }]
@@ -104,10 +106,28 @@ test('tolling:deliverySave creates linked blowing fee invoice with group-4 items
   const invItem = db.prepare('SELECT unit, total_price FROM invoice_items WHERE invoice_id=?').get(del.invoice_id);
   assert.equal(invItem.unit, 'حبة');
   assert.equal(invItem.total_price, 50000);
-  assert.throws(() => h['tolling:deliveryVoid'](null, id, 1), /ألغِ الفاتورة أولاً/);
+  // سلسلة الحذف عكسية: الفاتورة أصلٌ للتسليم، فلا تُحذف ووصلها قائم
+  const err = (() => { try { h['sales:delete'](null, del.invoice_id, 1); return null; } catch (e) { return e; } })();
+  assert.ok(err && /سند تسليم عميل D-1/.test(err.message), err && err.message);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoices WHERE id=?').get(del.invoice_id).c, 1);
+  // حذف التسليم وحده: رصيد العميل يتردّد والفاتورة وذاكرتها باقيتان
+  const balBefore = h['tolling:balance']()[0];
+  h['tolling:deliveryDelete'](null, id, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_deliveries WHERE id=?').get(id).c, 0);
+  const bal = h['tolling:balance']()[0];
+  assert.equal(bal.delivered_out, 0);
+  assert.equal(bal.remaining, balBefore.remaining + 100);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoices WHERE id=?').get(del.invoice_id).c, 1,
+    'فاتورة الأجرة ليست تابعاً للتسليم');
+  assert.equal(db.prepare('SELECT COALESCE(SUM(amount),0) a FROM party_ledger WHERE doc_type=? AND doc_id=?')
+    .get('invoice', del.invoice_id).a, 50000, 'أثرها المحاسبي باقٍ');
+  // وبعد حذف التسليم صار حذف الفاتورة ممكناً
+  assert.equal(h['sales:delete'](null, del.invoice_id, 1).ok, true);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM party_ledger WHERE doc_type='invoice' AND doc_id=?")
+    .get(del.invoice_id).c, 0);
 });
 
-test('tolling:deliveryVoid frees the balance again', () => {
+test('تسليم خام العميل: حذف السند يردّ رصيد العميل', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
   h['tolling:receiptSave'](null, {
@@ -118,23 +138,43 @@ test('tolling:deliveryVoid frees the balance again', () => {
     doc_number: 'D-1', doc_date: '2026-10-18', party_id: 1,
     items: [{ item_id: 2, quantity: 50, unit: 'حبة' }]
   }, 1);
-  h['tolling:deliveryVoid'](null, id, 1);
+  assert.equal(h['tolling:deliveryImpact'](null, id).value, 50, 'النافذة تعرض حبات المسلَّم');
+  h['tolling:deliveryDelete'](null, id, 1);
   const bal = h['tolling:balance']()[0];
   assert.equal(bal.delivered_out, 0);
   assert.equal(bal.remaining, 20000);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_delivery_items WHERE delivery_id=?').get(id).c, 0);
 });
 
-test('tolling:receiptVoid excludes voided receipts from balance', () => {
+test('تسليم غير كافٍ يُرفض بلا أثر', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc();
+  h['tolling:receiptSave'](null, {
+    doc_number: '1', doc_date: '2026-10-18', party_id: 1,
+    items: [{ item_id: 1, boxes: 4, pieces_per_box: 5000 }]
+  }, 1);
+  assert.throws(() => h['tolling:deliverySave'](null, {
+    doc_number: 'D-9', doc_date: '2026-10-18', party_id: 1,
+    items: [{ item_id: 2, quantity: 99999, unit: 'حبة' }]
+  }, 1), /أكبر من رصيد العميل/);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_deliveries').get().c, 0);
+});
+
+test('حذف سند الخام يحذف كراتينهِ ويخرج العميل من الأرصدة', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
   const { id } = h['tolling:receiptSave'](null, {
     doc_number: '1', doc_date: '2026-10-18', party_id: 1,
     items: [{ item_id: 1, boxes: 4, pieces_per_box: 5000 }]
   }, 1);
-  h['tolling:receiptVoid'](null, id, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM cartons WHERE source='customer'").get().c, 4);
+  h['tolling:receiptDelete'](null, id, 1);
   const bal = h['tolling:balance']()[0];
   assert.equal(bal.raw_in, 0);
   assert.equal(bal.remaining, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_raw_receipts WHERE id=?').get(id).c, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_raw_items WHERE receipt_id=?').get(id).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM cartons WHERE source='customer'").get().c, 0, 'كراتينه مُمحية');
 });
 
 test('tolling:suggestReceipt suggests the next numeric document number', () => {

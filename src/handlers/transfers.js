@@ -1,8 +1,19 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance } = require('../stock');
+const { writeMoves, getBalance } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const docDelete = require('../docDelete');
+
+// نقل بين مخازن لا يغيّر عدّادات الصنف (خصم من مخزن وإضافة إلى آخر بنفس السلة)،
+// فحذفه يردّ حركاته فقط: صافي كل (صنف × سلة) صفر، أي لا لمس للعدّادات.
+const TRANSFER_SPEC = {
+  table: 'transfers',
+  docType: 'transfer',
+  auditEntity: 'transfer',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(pieces),0) t FROM transfer_items WHERE transfer_id=?').get(id).t,
+  deps: [],
+};
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('transfers:suggest', () => suggestNumber(getDb(), 'transfers'));
@@ -76,15 +87,7 @@ module.exports = function register(ipcMain) {
     return { id };
   });
 
-  ipcMain.handle('transfers:void', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM transfers WHERE id=?').get(id);
-    if (!before) throw new Error('السند غير موجود');
-    withTransaction(db, () => {
-      voidDoc(db, 'transfer', id, userId);
-      db.prepare(`UPDATE transfers SET status='void' WHERE id=?`).run(id);
-    });
-    audit(db, userId, 'void', 'transfer', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('transfers:impact', (e, id) => docDelete.impact(getDb(), TRANSFER_SPEC, id));
+
+  ipcMain.handle('transfers:delete', (e, id, userId) => docDelete.hardDelete(getDb(), TRANSFER_SPEC, id, userId));
 };

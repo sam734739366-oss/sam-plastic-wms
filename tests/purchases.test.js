@@ -116,10 +116,10 @@ test('purchases:edit blocked when cartons issued', () => {
   assert.throws(() => h['purchases:save'](null, {
     id, doc_number: 'P-1', doc_date: '2026-10-19',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون' }]
-  }, 1), /ألغِ تصريح الصرف أولاً/);
+  }, 1), /احذف تصريح الصرف أولاً/);
 });
 
-test('purchases:void reverses moves, salem and deletes cartons; blocked when issued', () => {
+test('purchases:delete يردّ الحركات والعدّادات ويمحو الكراتين؛ والمصروفة تمنع الحذف', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
   const { id } = h['purchases:save'](null, {
@@ -127,13 +127,23 @@ test('purchases:void reverses moves, salem and deletes cartons; blocked when iss
     items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'كرتون', carton_prefix: 'K-' }]
   }, 1);
   db.prepare(`UPDATE cartons SET status='issued' WHERE purchase_id=?`).run(id);
-  assert.throws(() => h['purchases:void'](null, id, 1), /ألغِ تصريح الصرف أولاً/);
+  // النافذة التحذيرية تعرض المانع قبل التأكيد، ثم الحذف يرفضه
+  const imp = h['purchases:impact'](null, id);
+  assert.equal(imp.deps.length, 2, 'كرتونان مصروفان = مانعان');
+  assert.match(imp.deps[0].number, /^K-/);
+  assert.equal(imp.impact.length, 1, 'الأثر المعروض = حركة الشراء واحدة');
+  assert.throws(() => h['purchases:delete'](null, id, 1), /K-1/);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM purchases WHERE id=?').get(id).c, 1, 'الفاتورة باقية بعد المنع');
   db.prepare(`UPDATE cartons SET status='in_stock' WHERE purchase_id=?`).run(id);
-  h['purchases:void'](null, id, 1);
+  const res = h['purchases:delete'](null, id, 1);
+  assert.equal(res.ok, true);
+  assert.equal(res.deleted, 'purchases');
+  assert.equal(res.reverted, 1, 'حركة واحدة رُدّت');
   const bal = getBalance(db, 1, 1);
   assert.equal(bal.balance_pieces, 0);
   assert.equal(salem(db), 0);
-  assert.equal(db.prepare('SELECT status FROM purchases WHERE id=?').get(id).status, 'void');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM purchases WHERE id=?').get(id).c, 0, 'لا صف «ملغى» — يُمحى');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM stock_moves WHERE doc_type=? AND doc_id=?').get('purchase', id).c, 0);
   assert.equal(db.prepare('SELECT COUNT(*) c FROM cartons WHERE purchase_id=?').get(id).c, 0);
 });
 

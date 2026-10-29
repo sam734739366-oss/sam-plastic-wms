@@ -24,15 +24,14 @@ register('stock', {
       try {
         const settings = await api.invoke('settings:get');
         const totalPieces = lastRows.reduce((s, r) => s + (Number(r.balance_pieces) || 0), 0);
-        const totalKg = lastRows.reduce((s, r) => s + (Number(r.balance_kg) || 0), 0);
         await api.invoke('print:open', {
           kind: 'report',
           title: 'جرد المخزون',
           metaLines: ['المخزن: ' + lastWhName, 'عدد الأصناف: ' + lastRows.length, 'تاريخ الطباعة: ' + new Date().toLocaleString('ar')],
-          headers: ['الكود', 'الصنف', 'الوحدة', 'الرصيد المخزني', 'سليم', 'تالف', 'محرز', 'الوزن كجم'],
+          headers: ['الكود', 'الصنف', 'الوحدة', 'الرصيد المخزني', 'سليم', 'تالف', 'محرز'],
           rows: lastRows.map(r => [esc(r.code), esc(r.name), esc(r.unit_name), esc(r.balance_label),
-            fmtNum(r.qty_salem, 0), fmtNum(r.qty_talef, 0), fmtNum(r.qty_muharraz, 0), fmtNum(r.balance_kg)]),
-          foot: `<div class="notes"><b>إجمالي الحبات: ${fmtNum(totalPieces, 0)} — إجمالي الوزن: ${fmtNum(totalKg)} كجم</b></div>`,
+            fmtNum(r.qty_salem, 0), fmtNum(r.qty_talef, 0), fmtNum(r.qty_muharraz, 0)]),
+          foot: `<div class="notes"><b>إجمالي الرصيد: ${fmtNum(totalPieces, 0)} حبة</b></div>`,
           settings,
         });
       } catch (e) { toast(String(e.message || e), 'err'); }
@@ -47,9 +46,8 @@ register('stock', {
         lastRows = rows;
         lastWhName = el.querySelector('#f-warehouse').selectedOptions[0]?.textContent || 'كل المخازن';
         const totalPieces = rows.reduce((s, r) => s + r.balance_pieces, 0);
-        const totalKg = rows.reduce((s, r) => s + r.balance_kg, 0);
         el.querySelector('#summary').innerHTML =
-          `<b>عدد الأصناف:</b> ${rows.length} &nbsp; <b>إجمالي الحبات:</b> ${fmtNum(totalPieces, 0)} &nbsp; <b>إجمالي الوزن:</b> ${fmtNum(totalKg)} كجم`;
+          `<b>عدد الأصناف:</b> ${rows.length} &nbsp; <b>إجمالي الرصيد:</b> ${fmtNum(totalPieces, 0)} حبة`;
         renderTable(el.querySelector('#table-wrap'), [
           { key: 'code', label: 'الكود', render: r => `<span dir="ltr">${esc(r.code)}</span>` },
           { key: 'name', label: 'الصنف' },
@@ -58,7 +56,6 @@ register('stock', {
           { key: 'qty_salem', label: 'سليم', render: r => fmtNum(r.qty_salem, 0) },
           { key: 'qty_talef', label: 'تالف', render: r => fmtNum(r.qty_talef, 0) },
           { key: 'qty_muharraz', label: 'محرز', render: r => fmtNum(r.qty_muharraz, 0) },
-          { key: 'balance_kg', label: 'الوزن كجم', render: r => fmtNum(r.balance_kg) },
         ], rows);
       } catch (e) { toast(String(e.message || e), 'err'); }
     }

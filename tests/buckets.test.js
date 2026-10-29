@@ -73,30 +73,35 @@ test('النقل بين مخزنين ينقل تخصيص السليم مع ال�
   assert.equal(all.qty_salem, 1000);
 });
 
-test('ترحيل أعمدة السلة: بنود الخردة تالف ومرتجع البيع يرث سلة فاتورته', () => {
-  const db = makeDb();
-  for (const t of ['purchase_items', 'issue_items', 'receive_items', 'exit_items',
-    'transfer_items', 'invoice_items', 'sales_return_items', 'purchase_return_items']) {
-    db.exec(`ALTER TABLE ${t} DROP COLUMN bucket`);
-  }
-  db.prepare("INSERT INTO items (code, name, unit_name) VALUES ('901', 'علبة', 'حبة')").run();
-  db.prepare("INSERT INTO warehouses (name) VALUES ('المخزن الرئيسي')").run();
+test('سلة كل بند جزء من مخطط v2: افتراضها سليم وخردة البيع تالف ومرتجع البيع يرثها', () => {
+  const db = makeDb(); setDb(db);
+  const h = stubIpc('warehouses', 'items', 'purchases', 'sales', 'returns');
+  h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
   const wh = db.prepare('SELECT id FROM warehouses ORDER BY id LIMIT 1').get().id;
-  db.prepare("INSERT INTO invoices (doc_number, doc_date, invoice_type) VALUES ('INV-1', '2026-10-25', 'sale')").run();
-  db.prepare("INSERT INTO invoices (doc_number, doc_date, invoice_type) VALUES ('INV-2', '2026-10-25', 'scrap')").run();
-  db.prepare(`INSERT INTO invoice_items (invoice_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg)
-    VALUES (1, 1, ${wh}, 100, 'حبة', 100, 0.5)`).run();
-  db.prepare(`INSERT INTO invoice_items (invoice_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg)
-    VALUES (2, 1, ${wh}, 10, 'حبة', 10, 0.05)`).run();
-  db.prepare("INSERT INTO sales_returns (doc_number, doc_date, invoice_id) VALUES ('R-1', '2026-10-25', 1)").run();
-  db.prepare(`INSERT INTO sales_return_items (return_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg)
-    VALUES (1, 1, ${wh}, 5, 'حبة', 5, 0.025)`).run();
-  const { migrate } = require('../src/db');
-  migrate(db);
-  assert.equal(db.prepare('SELECT bucket FROM invoice_items WHERE invoice_id=1').get().bucket, 'salem');
-  assert.equal(db.prepare('SELECT bucket FROM invoice_items WHERE invoice_id=2').get().bucket, 'talef');
-  assert.equal(db.prepare('SELECT bucket FROM sales_return_items WHERE return_id=1').get().bucket, 'salem');
-  assert.equal(db.prepare('SELECT bucket FROM purchase_items').all().length, 0);
+  const { id } = h['items:save'](null, { code: '901', name: 'علبة', unit_name: 'حبة', qty_salem: 100, qty_talef: 100 }, 1);
+  // بنود الاستلام القديمة لم تعد موجودة: السلة تُكتب في حركة المخزون لا في بند استلام
+  assert.equal(db.prepare(`SELECT COUNT(*) c FROM sqlite_master WHERE type='table'
+    AND name IN ('receive_items','receive_permits','production_results')`).get().c, 0, 'جداول v1 زالت');
+  for (const t of ['purchase_items', 'issue_items', 'exit_items', 'transfer_items',
+    'invoice_items', 'sales_return_items', 'purchase_return_items']) {
+    const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(t).sql;
+    assert.match(sql, /bucket TEXT NOT NULL DEFAULT 'salem' CHECK/, `${t}: سلة إلزامية بقيدها`);
+  }
+  // بند بلا سلة صريحة = سليم
+  h['purchases:save'](null, { doc_number: 'ش-1', doc_date: '2026-10-25',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 50, unit: 'حبة' }] }, 1);
+  assert.equal(db.prepare('SELECT bucket FROM purchase_items').get().bucket, 'salem');
+  // فاتورة خردة: سلة البنود تالف بلا تحديدها صراحة، ومرتجع البيع يرثها
+  const { id: invId } = h['sales:save'](null, { doc_number: 'ف-1', doc_date: '2026-10-25', invoice_type: 'scrap',
+    items: [{ item_id: id, warehouse_id: wh, quantity: 20, unit: 'حبة', unit_price: 1 }] }, 1);
+  assert.equal(db.prepare('SELECT bucket FROM invoice_items WHERE invoice_id=?').get(invId).bucket, 'talef');
+  h['returns:save'](null, { type: 'sale', doc_number: 'مر-1', doc_date: '2026-10-25', invoice_id: invId,
+    items: [{ item_id: id, warehouse_id: wh, quantity: 5, unit: 'حبة' }] }, 1);
+  assert.equal(db.prepare('SELECT bucket FROM sales_return_items').get().bucket, 'talef', 'مرتجع البيع يرث سلة سطر الفاتورة');
+  // القيد يرفض سلة غير معروفة على مستوى القاعدة
+  assert.throws(() => db.prepare(`INSERT INTO invoice_items
+    (invoice_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, bucket)
+    VALUES (${invId}, ${id}, ${wh}, 1, 'حبة', 1, 0, 'bogus')`).run(), /CHECK/);
 });
 
 test('applyBucketsDelta تجمّع دلتا كل سلة لصنف مكرر بنود بسلات مختلفة', () => {
@@ -119,7 +124,7 @@ test('applyBucketsDelta تجمّع دلتا كل سلة لصنف مكرر بنو
   assert.equal(it2.qty_salem + it2.qty_talef + it2.qty_muharraz, 0);
 });
 
-test('فاتورة شراء بسلات مختلفة تزيد كل عداد سلة على حدة وتنعكس عند الإلغاء', () => {
+test('فاتورة شراء بسلات مختلفة تزيد كل عداد سلة على حدة وتنعكس عند الحذف', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc('warehouses', 'items', 'purchases', 'reports');
   h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
@@ -137,14 +142,22 @@ test('فاتورة شراء بسلات مختلفة تزيد كل عداد سل�
   assert.equal(inv().qty_salem, 100);
   assert.equal(inv().qty_talef, 30);
   assert.equal(inv().qty_muharraz, 5);
-  const line = db.prepare('SELECT bucket FROM purchase_items WHERE purchase_id=? AND item_id=?').get(pid, id);
-  assert.equal(line.bucket, 'salem');
-  // إلغاء الفاتورة يعيد العدادات كلها للصفر
-  h['purchases:void'](null, pid, 1);
+  const lines = db.prepare('SELECT bucket FROM purchase_items WHERE purchase_id=? AND item_id=? ORDER BY id').all(pid, id);
+  assert.deepEqual(lines.map(l => l.bucket), ['salem', 'talef', 'muharraz']);
+  // نافذة الأثر تعرض الثلاث سلات قبل التأكيد
+  const imp = h['purchases:impact'](null, pid);
+  assert.equal(imp.impact.length, 3);
+  assert.deepEqual(imp.impact.map((r) => r.bucket).sort(), ['muharraz', 'salem', 'talef']);
+  assert.deepEqual(imp.impact.map((r) => r.net).sort((a, b) => a - b), [5, 30, 100]);
+  // حذف الفاتورة يعيد العدادات كلها للصفر ويمحو بنودها وحركاتها
+  h['purchases:delete'](null, pid, 1);
   assert.equal(inv().qty_salem + inv().qty_talef + inv().qty_muharraz, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM purchases WHERE id=?').get(pid).c, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM purchase_items WHERE purchase_id=?').get(pid).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='purchase' AND doc_id=?").get(pid).c, 0);
 });
 
-test('صرف بند تالف يتجاوز الرصيد التالف يُرفض برسالة السلة', () => {
+test('صرف بند تالف يتجاوز الرصيد التالف يُرفض برسالة السلة وينعكس عند الحذف', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc('warehouses', 'items', 'issues');
   h['warehouses:save'](null, { name: 'المخزن الرئيسي' }, 1);
@@ -162,9 +175,18 @@ test('صرف بند تالف يتجاوز الرصيد التالف يُرفض �
   const it = db.prepare('SELECT * FROM items WHERE id=?').get(id);
   assert.equal(it.qty_salem, 100);
   assert.equal(it.qty_talef, 5);
-  // عكس الأثر: إلغاء التصريح يعيد التالف
-  h['issues:void'](null, iid, 1);
+  // عكس الأثر: حذف التصريح يعيد التالف ويمحو حركته
+  h['issues:delete'](null, iid, 1);
   assert.equal(db.prepare('SELECT qty_talef FROM items WHERE id=?').get(id).qty_talef, 10);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='issue' AND doc_id=?").get(iid).c, 0);
+  // والثبات: عداد كل سلة = صافي حركاتها
+  const net = db.prepare(`SELECT bucket, COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n
+    FROM stock_moves WHERE item_id=? GROUP BY bucket`).all(id);
+  for (const key of ['salem', 'talef', 'muharraz']) {
+    const r = net.find((x) => x.bucket === key);
+    assert.equal(r ? r.n : 0, Number(db.prepare(`SELECT qty_${key} q FROM items WHERE id=?`).get(id).q),
+      `ثبات سلة ${key} بعد الحذف`);
+  }
 });
 
 test('خروج بند محرز يتجاوز الرصيد المحرز يُرفض والمحرز المتاح يخصم', () => {

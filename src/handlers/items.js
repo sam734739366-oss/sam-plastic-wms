@@ -73,7 +73,9 @@ module.exports = function register(ipcMain) {
     const name = String(row.name || '').trim();
     if (!name) throw new Error('اسم الصنف مطلوب');
     const unit = String(row.unit_name || '').trim() || 'حبة';
-    if (!UNITS.includes(unit)) throw new Error('الوحدة يجب أن تكون: علبة، حبة، غطاء، كيس، كرتون، أو امبول');
+    // الوحدات ديناميكية في v2: لكل صنف وحدته الخاصة (زجاجة/عبوة/غطاء/كيس/امبول/علبة...)،
+    // وقائمة الوحدات المعروفة مجرد اقتراح في الواجهة لا قيد على التخزين.
+    if (unit.length > 20) throw new Error('اسم الوحدة طويل جدًا — ٢٠ حرفًا كحد أقصى');
     const dup = db.prepare('SELECT id FROM items WHERE code=? AND id IS NOT ?').get(code, row.id || -1);
     if (dup) throw new Error('كود الصنف مكرر — اختر كوداً آخر');
 
@@ -295,7 +297,9 @@ module.exports = function register(ipcMain) {
       for (const r of rows) {
         const code = normalizeCode(r.code);
         if (!/^\d+$/.test(code) || !String(r.name || '').trim()) continue;
-        const unit = UNITS.includes(r.unit_name) ? r.unit_name : 'حبة';
+        // الوحدات ديناميكية: وحدة الملف محفوظة كما هي، والقائمة المعروفة مجرد افتراضي
+        const rawUnit = String(r.unit_name || '').trim();
+        const unit = rawUnit && rawUnit.length <= 20 ? rawUnit : 'حبة';
         const res = ins.run(code, String(r.name).trim(), unit, r.weight_grams || null,
           r.pieces_per_carton || null, r.pieces_per_shadda || null, r.pieces_per_bag || null,
           Number(r.qty_salem) || 0, Number(r.qty_talef) || 0, Number(r.qty_muharraz) || 0,

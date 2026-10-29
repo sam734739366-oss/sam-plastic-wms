@@ -22,7 +22,7 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     return db.prepare(`SELECT l.*, p.name party_name
       FROM party_ledger l JOIN parties p ON p.id = l.party_id
-      WHERE l.party_id = ? AND l.status = 'active'
+      WHERE l.party_id = ?
       ORDER BY l.doc_date, l.id`).all(partyId);
   });
 
@@ -33,11 +33,11 @@ module.exports = function register(ipcMain) {
     if (!party) throw new Error('الطرف غير موجود');
     const opening = dateFrom
       ? db.prepare(`SELECT COALESCE(SUM(CASE WHEN side='debit' THEN amount ELSE -amount END),0) o
-          FROM party_ledger WHERE party_id=? AND status='active' AND doc_date < ?`)
+          FROM party_ledger WHERE party_id=? AND doc_date < ?`)
         .get(partyId, dateFrom).o
       : 0;
     let sql = `SELECT l.*, p.name party_name FROM party_ledger l JOIN parties p ON p.id=l.party_id
-      WHERE l.party_id=? AND l.status='active'`;
+      WHERE l.party_id=?`;
     const args = [partyId];
     if (dateFrom) { sql += ' AND l.doc_date >= ?'; args.push(dateFrom); }
     if (dateTo) { sql += ' AND l.doc_date <= ?'; args.push(dateTo); }
@@ -58,7 +58,7 @@ module.exports = function register(ipcMain) {
         COALESCE(SUM(CASE WHEN l.side='debit' THEN l.amount ELSE 0 END),0) debit,
         COALESCE(SUM(CASE WHEN l.side='credit' THEN l.amount ELSE 0 END),0) credit,
         COALESCE(SUM(CASE WHEN l.side='debit' THEN l.amount ELSE -l.amount END),0) net
-      FROM parties p LEFT JOIN party_ledger l ON l.party_id=p.id AND l.status='active'
+      FROM parties p LEFT JOIN party_ledger l ON l.party_id=p.id
       GROUP BY p.id ORDER BY p.name`).all()
       .map(r => ({ ...r, debit: Number(r.debit), credit: Number(r.credit), net: Number(r.net) }));
   });
@@ -67,7 +67,7 @@ module.exports = function register(ipcMain) {
   ipcMain.handle('ledger:cash-report', (e, dateFrom, dateTo) => {
     const db = getDb();
     let sql = `SELECT l.*, p.name party_name FROM party_ledger l JOIN parties p ON p.id=l.party_id
-      WHERE l.status='active' AND (l.cash_in > 0 OR l.cash_out > 0)`;
+      WHERE (l.cash_in > 0 OR l.cash_out > 0)`;
     const args = [];
     if (dateFrom) { sql += ' AND l.doc_date >= ?'; args.push(dateFrom); }
     if (dateTo) { sql += ' AND l.doc_date <= ?'; args.push(dateTo); }

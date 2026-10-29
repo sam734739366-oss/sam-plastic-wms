@@ -126,15 +126,21 @@ test('تعديل الفاتورة يعكس القديم ويطبق الجديد'
   assert.equal(buckets(db).s, 490);
 });
 
-test('إلغاء الفاتورة يعيد الكمية ويبطل القيد', () => {
+test('حذف الفاتورة يعيد الكمية ويمحو القيد', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales']);
   seedStock(h);
   const { id } = h['sales:save'](null, saleDoc('INV-5', [{ item_id: 1, warehouse_id: 1, quantity: 30, unit: 'حبة', unit_price: 50 }]), 1);
-  h['sales:void'](null, id, 1);
+  const imp = h['sales:impact'](null, id);
+  assert.equal(imp.impact.length, 1);
+  assert.equal(imp.value, 1500, 'قيمة المستند المعروضة في النافذة هي إجمالي الفاتورة');
+  h['sales:delete'](null, id, 1);
   assert.equal(getBalance(db, 1, 1).balance_pieces, 500);
   assert.equal(ledger.partyBalance(db, 2), 0);
   assert.equal(ledger.cashBalance(db), 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoices WHERE id=?').get(id).c, 0, 'لا أثر «ملغى» — الصف يُمحى');
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM party_ledger WHERE doc_type='invoice' AND doc_id=?").get(id).c, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoice_items WHERE invoice_id=?').get(id).c, 0);
 });
 
 test('مرتجع مربوط بالفاتورة يعيد الكمية للسلة', () => {
@@ -182,7 +188,7 @@ test('مرتجع بأسعار يخفض ذمة العميل', () => {
   assert.equal(ledger.partyBalance(db, 2), 4500);
 });
 
-test('رفض إلغاء فاتورة عليها مرتجع نشط', () => {
+test('رفض حذف فاتورة عليها مرتجع — والرسالة تذكر رقم المرتجع', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales', 'returns']);
   seedStock(h);
@@ -192,5 +198,13 @@ test('رفض إلغاء فاتورة عليها مرتجع نشط', () => {
     payment_method: 'credit',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 10, unit: 'حبة' }],
   }, 1);
-  assert.throws(() => h['sales:void'](null, invId, 1), /مرتجعات نشطة/);
+  const err = (() => { try { h['sales:delete'](null, invId, 1); return null; } catch (e) { return e; } })();
+  assert.ok(err && /مرتجع بيع R-4/.test(err.message), 'الرسالة تذكر المرتجع برقمه');
+  assert.equal(err.code, 'DEPENDENTS');
+  assert.equal(/احذف الأحدث/.test(err.message), true, 'والرسالة توجّه لحذف الأحدث أولاً');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoices WHERE id=?').get(invId).c, 1, 'الفاتورة باقية بعد المنع');
+  // وبعد حذف المرتجع صار الحذف ممكناً
+  const { id: retId } = db.prepare('SELECT id FROM sales_returns').get();
+  h['returns:delete'](null, { type: 'sale', id: retId }, 1);
+  assert.equal(h['sales:delete'](null, invId, 1).ok, true);
 });

@@ -1,23 +1,31 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo, bucketOptions, bucketBadge} from '../ui.js';
+import {
+  toast, confirmDialog, implicationsDialog, renderTable, attachRowMenu, rowActions, openModal, esc,
+  itemCombo, bucketOptions, bucketBadge, canWrite, unitOf,
+} from '../ui.js';
 import { unitOptionsFor, toPieces } from '../units.js';
 import { fmtNum, today } from '../fmt.js';
 
 register('issues', {
   title: 'تصاريح الصرف للإنتاج',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const rows = await api.invoke('issues:list');
       el.innerHTML = `
-        <div class="toolbar"><button class="btn primary" id="btn-add">+ تصريح صرف</button></div>
+        <div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ تصريح صرف</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
+        <div class="help-card" style="margin-bottom:12px">
+          <b>ملاحظة الحذف:</b> الحذف نهائي — يُمحى التصريح مع حركاته وكراتينه المُصروفة وتعود الكميات إلى أرصدتها فوراً،
+          ولا يمكن حذف تصريح استُلم إنتاجه قبل حذف سند الاستلام أولاً.
+        </div>
         <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
-      el.querySelector('#btn-add').onclick = () => form(null);
-      const active = rows.filter(r => r.status !== 'void');
-      const own = active.filter(r => r.source === 'own');
+      if (writable) el.querySelector('#btn-add').onclick = () => form(null);
+      const own = rows.filter(r => r.source === 'own');
       el.querySelector('#summary').innerHTML =
-        `عدد التصاريح: <b>${rows.length}</b> — النشطة: <b>${active.length}</b> — حبات الصرف من خام المصنع: <b>${fmtNum(own.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
+        `عدد التصاريح: <b>${rows.length}</b> — حبات الصرف من خام المصنع: <b>${fmtNum(own.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`
+        + ` — بانتظار الاستلام: <b>${rows.filter(r => (Number(r.receipts_count) || 0) === 0).length}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
@@ -26,18 +34,21 @@ register('issues', {
         { key: 'machine_name', label: 'المكينة', render: r => r.machine_name || '—' },
         { key: 'shift_name', label: 'الوردية', render: r => r.shift_name || '—' },
         { key: 'receiver_name', label: 'المستلم', render: r => r.receiver_name || '—' },
+        { key: 'items_count', label: 'البنود' },
         { key: 'total_pieces', label: 'الحبات', render: r => fmtNum(r.total_pieces, 0) },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
+        { key: 'receipts_count', label: 'سندات الاستلام', render: r => fmtNum(r.receipts_count, 0) },
       ], rows);
-      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
-        const r = rows[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r.id) },
-          { label: 'طباعة', onClick: () => printDoc(r.id) },
-          { label: 'تعديل', onClick: () => edit(r.id) },
-          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
-        ];
-      });
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => rowActions({
+        id: rows[ri].id,
+        entity: 'issues',
+        valueKind: 'pieces',
+        label: 'تصريح الصرف',
+        view: (id) => view(id),
+        print: (id) => printDoc(id),
+        edit: (id) => edit(id),
+        reload: load,
+        readOnly: !writable,
+      }));
     }
 
     async function printDoc(id) {
@@ -70,7 +81,7 @@ register('issues', {
       try {
         const doc = await api.invoke('issues:get', id);
         if (doc.cartons.some(c => c.status === 'finished')) {
-          toast('لا يمكن تعديل التصريح — توجد نتائج إنتاج على كراتينه', 'err');
+          toast('لا يمكن تعديل التصريح — استُلم إنتاج كراتينه، احذف سند الاستلام أولاً', 'err');
           return;
         }
         if (doc.cartons.length) {
@@ -81,21 +92,6 @@ register('issues', {
           if (!ok) return;
         }
         form(doc);
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('issues:get', id);
-        if (doc.cartons.some(c => c.status === 'finished')) {
-          toast('لا يمكن إلغاء التصريح — توجد نتائج إنتاج على كراتينه، احذفها أولاً', 'err');
-          return;
-        }
-        const lines = ['سيُلغى أثر التصريح على المخزون وأرصدة سليم، وتُعاد الكراتين للمخزن.'];
-        if (!(await implicationsDialog('إلغاء تصريح صرف', lines))) return;
-        await api.invoke('issues:void', id, currentUser().id);
-        toast('تم إلغاء التصريح', 'ok');
-        await load();
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
@@ -256,7 +252,7 @@ register('issues', {
               const b = row.querySelector('.p-bucket').value;
               const av = bal['qty_' + b] || 0;
               const bl = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' }[b];
-              balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} حبة`;
+              balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} ${unitOf(item)}`;
             } catch { balText.textContent = ''; }
           }
           updateTotal();
@@ -272,7 +268,7 @@ register('issues', {
             <div style="max-height:300px;overflow:auto;line-height:2.2">
               ${avail.length ? avail.map(c => `<label class="check" style="display:block;cursor:pointer">
                 <input type="checkbox" value="${esc(c.carton_number)}" ${row._cartons.includes(c.carton_number) ? 'checked' : ''}>
-                ${esc(c.carton_number)} (${esc(c.pieces)} حبة — ${customer ? 'سند استلام' : 'فاتورة'} ${esc((customer ? c.receipt_number : c.purchase_number) || '—')})</label>`).join('')
+                ${esc(c.carton_number)} (${esc(c.pieces)} ${unitOf(item)} — ${customer ? 'سند استلام خام' : 'فاتورة شراء'} ${esc((customer ? c.receipt_number : c.purchase_number) || '—')})</label>`).join('')
                 : `<p class="muted">${customer ? 'لا توجد كراتين متاحة لعهدة هذا العميل من هذا الصنف' : 'لا توجد كراتين متاحة لهذا الصنف'}</p>`}
             </div>`,
             [{ label: 'تأكيد', class: 'primary', onClick: (b) => {

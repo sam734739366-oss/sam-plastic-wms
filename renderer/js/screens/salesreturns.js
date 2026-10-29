@@ -1,6 +1,9 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, esc, renderTable, attachRowMenu, openModal, implicationsDialog, bucketOptions, bucketBadge } from '../ui.js';
+import {
+  toast, esc, renderTable, attachRowMenu, rowActions, openModal, implicationsDialog,
+  bucketOptions, bucketBadge, canWrite, unitOf,
+} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -12,35 +15,37 @@ import { fmtMoney, fmtNum, today } from '../fmt.js';
 register('salesreturns', {
   title: 'مرتجعات الفواتير',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const { sales } = await api.invoke('returns:list');
       const rows = sales;
       el.innerHTML = `
-        <div class="toolbar"><button class="btn primary" id="btn-add">+ مرتجع فاتورة</button></div>
+        <div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ مرتجع فاتورة</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
         <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
-      el.querySelector('#btn-add').onclick = () => form(null);
-      const active = rows.filter(r => r.status !== 'void');
-      const money = active.reduce((s, r) => s + (Number(r.total) || 0), 0);
+      if (writable) el.querySelector('#btn-add').onclick = () => form(null);
+      const money = rows.reduce((s, r) => s + (Number(r.total) || 0), 0);
       el.querySelector('#summary').innerHTML =
-        `عدد المرتجعات: <b>${rows.length}</b> — النشطة: <b>${active.length}</b>${money ? ` — الإجمالي: <b>${fmtMoney(money)}</b>` : ''}`;
+        `عدد المرتجعات: <b>${rows.length}</b>${money ? ` — الإجمالي: <b>${fmtMoney(money)}</b>` : ''}`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
         { key: 'invoice_number', label: 'الفاتورة', render: r => `<span dir="ltr">${esc(r.invoice_number || '—')}</span>` },
         { key: 'party_name', label: 'العميل', render: r => r.party_name || '—' },
         { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغاة</span>' : '<span class="tag salem">نشطة</span>' },
       ], rows);
-      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
-        const r = rows[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r.id) },
-          { label: 'طباعة', onClick: () => printDoc(r.id) },
-          { label: 'تعديل', onClick: () => edit(r.id) },
-          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
-        ];
-      });
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => rowActions({
+        id: rows[ri].id,
+        entity: 'returns',
+        valueKind: 'money',
+        label: 'مرتجع الفاتورة',
+        payloadOf: (id) => ({ type: 'sale', id }),
+        view: (id) => view(id),
+        print: (id) => printDoc(id),
+        edit: (id) => edit(id),
+        reload: load,
+        readOnly: !writable,
+      }));
     }
 
     async function printDoc(id) {
@@ -76,18 +81,6 @@ register('salesreturns', {
           'سيُعكس أثر المرتجع الحالي على المخزون والسلات ويُعاد تطبيقه بالقيم الجديدة.',
         ]))) return;
         form(doc);
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('returns:getSale', id);
-        if (!(await implicationsDialog('إلغاء مرتجع', [
-          `سيُلغى أثر المرتجع ${esc(doc.doc_number)} وتُخصم الكميات المرتجعة من المخزون مجدداً.`,
-        ]))) return;
-        await api.invoke('returns:void', { type: 'sale', id }, currentUser().id);
-        toast('تم إلغاء المرتجع', 'ok');
-        await load();
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
@@ -138,7 +131,7 @@ register('salesreturns', {
         api.invoke('sales:list'),
         api.invoke('warehouses:list'),
       ]);
-      const invoices = invoicesAll.filter(r => r.invoice_type === 'sale' && r.status === 'active');
+      const invoices = invoicesAll.filter(r => r.invoice_type === 'sale');
       const whName = (id) => (warehouses.find(w => w.id === Number(id)) || {}).name || '—';
       let avail = [];
 
@@ -186,7 +179,7 @@ register('salesreturns', {
                 const a = avail.find(x => x.item_id === ln.item_id);
                 const pieces = toPieces(ln.quantity, ln.unit, a || {});
                 if (a && pieces != null && pieces > a.remain) {
-                  toast(`كمية الإرجاع للصنف ${a.code} تتجاوز المتبقي (${fmtNum(a.remain, 0)} حبة)`, 'err');
+                  toast(`كمية الإرجاع للصنف ${a.code} تتجاوز المتبقي (${fmtNum(a.remain, 0)} ${unitOf(a)})`, 'err');
                   return;
                 }
               }
@@ -199,7 +192,7 @@ register('salesreturns', {
               for (const [itemId, pieces] of Object.entries(byItem)) {
                 const a = avail.find(x => x.item_id === Number(itemId));
                 if (a && pieces > a.remain) {
-                  toast(`إجمالي الإرجاع للصنف ${a.code} يتجاوز المتبقي (${fmtNum(a.remain, 0)} حبة)`, 'err');
+                  toast(`إجمالي الإرجاع للصنف ${a.code} يتجاوز المتبقي (${fmtNum(a.remain, 0)} ${unitOf(a)})`, 'err');
                   return;
                 }
               }
@@ -244,8 +237,8 @@ register('salesreturns', {
         const open = avail.filter(a => a.remain > 0);
         availWrap.style.display = 'block';
         availWrap.innerHTML = `<b>الأصناف المتاحة في الفاتورة:</b>
-          <table class="data" style="margin-top:6px"><thead><tr><th>الصنف</th><th>المتبقي (حبة)</th><th>الوحدة</th></tr></thead>
-          <tbody>${avail.map(a => `<tr><td>${esc(a.code)} — ${esc(a.name)}</td><td>${fmtNum(a.remain, 0)}</td><td>${esc(a.unit_name || a.unit || '')}</td></tr>`).join('')}</tbody></table>`;
+          <table class="data" style="margin-top:6px"><thead><tr><th>الصنف</th><th>المتبقي</th><th>الوحدة</th></tr></thead>
+          <tbody>${avail.map(a => `<tr><td>${esc(a.code)} — ${esc(a.name)}</td><td>${fmtNum(a.remain, 0)}</td><td>${esc(a.unit_name || '')}</td></tr>`).join('')}</tbody></table>`;
         addBtn.disabled = !open.length;
       }
 
@@ -290,7 +283,7 @@ register('salesreturns', {
           else if (data.unit && opts.some(o => o.value === data.unit)) unitSel.value = data.unit;
           whHidden.value = String(a.warehouse_id);
           whText.textContent = whName(a.warehouse_id);
-          remText.textContent = `${fmtNum(a.remain, 0)} حبة`;
+          remText.textContent = `${fmtNum(a.remain, 0)} ${unitOf(a)}`;
           if (!price.value && a.unit_price) price.value = a.unit_price;
           update();
         }
@@ -301,7 +294,7 @@ register('salesreturns', {
           const kg = piecesToWeightKg(pieces || 0, a?.weight_grams || 0);
           const p = parseFloat(price.value) || 0;
           const q = parseFloat(qty.value) || 0;
-          calc.textContent = `${pieces != null ? fmtNum(pieces, 0) + ' حبة' + (kg ? ' — ' + fmtNum(kg) + ' كجم' : '') : '—'}${p && q ? ' — ' + fmtMoney(p * q) : ''}`;
+          calc.textContent = `${pieces != null ? fmtNum(pieces, 0) + ' ' + unitOf(a) + (kg ? ' — ' + fmtNum(kg) + ' كجم' : '') : '—'}${p && q ? ' — ' + fmtMoney(p * q) : ''}`;
           updateTotal();
         }
         itemSel.onchange = refresh;

@@ -97,24 +97,32 @@ test('sales:save blowing_fee does not touch stock or buckets and accepts any ite
   assert.equal(buckets(db, 2).s + buckets(db, 2).t + buckets(db, 2).m, 0);
 });
 
-test('sales:void restores salem and blocks when linked to active delivery', () => {
+test('sales:delete يعيد السليم ويمتنع مع سند تسليم مرتبط', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['purchases', 'sales']);
+  const h = stubIpc(['purchases', 'sales', 'tolling']);
   stockIn(db, h, 1, 1, 1000);
   const { id } = h['sales:save'](null, {
     doc_number: '1', doc_date: '2026-10-18', invoice_type: 'sale',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 300, unit: 'حبة', unit_price: 100 }]
   }, 1);
-  db.prepare(`INSERT INTO customer_deliveries (doc_number, doc_date, party_id, invoice_id) VALUES ('D-1','2026-10-18',2,?)`).run(id);
-  assert.throws(() => h['sales:void'](null, id, 1), /التسليم أولاً/);
-  db.prepare(`UPDATE customer_deliveries SET status='void' WHERE invoice_id=?`).run(id);
-  h['sales:void'](null, id, 1);
+  const delId = db.prepare(`INSERT INTO customer_deliveries (doc_number, doc_date, party_id, invoice_id)
+    VALUES ('D-1','2026-10-18',2,?)`).run(id).lastInsertRowid;
+  const err = (() => { try { h['sales:delete'](null, id, 1); return null; } catch (e) { return e; } })();
+  assert.ok(err && /سند تسليم عميل D-1/.test(err.message), err && err.message);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoices WHERE id=?').get(id).c, 1, 'الفاتورة باقية بعد المنع');
+  assert.equal(getBalance(db, 1, 1).balance_pieces, 700, 'ولا أثر للحذف الممتنع على المخزون');
+  // حذف التسليم أولاً ثم الفاتورة: الأثر كله يردّ
+  h['tolling:deliveryDelete'](null, delId, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_deliveries WHERE id=?').get(delId).c, 0);
+  h['sales:delete'](null, id, 1);
   assert.equal(getBalance(db, 1, 1).balance_pieces, 1000);
   assert.equal(buckets(db).s, 1000);
-  assert.equal(db.prepare('SELECT status FROM invoices WHERE id=?').get(id).status, 'void');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoices WHERE id=?').get(id).c, 0, 'لا صفاً «ملغى»');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoice_items WHERE invoice_id=?').get(id).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='invoice'").get().c, 0);
 });
 
-test('exits:save requires driver, checks balance, deducts salem; void restores', () => {
+test('exits:save requires driver, checks balance, deducts salem; delete restores', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'exits']);
   stockIn(db, h, 1, 1, 500);
@@ -129,9 +137,12 @@ test('exits:save requires driver, checks balance, deducts salem; void restores',
   }, 1);
   assert.equal(getBalance(db, 1, 1).balance_pieces, 300);
   assert.equal(buckets(db).s, 300);
-  h['exits:void'](null, id, 1);
+  h['exits:delete'](null, id, 1);
   assert.equal(getBalance(db, 1, 1).balance_pieces, 500);
   assert.equal(buckets(db).s, 500);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM exit_permits WHERE id=?').get(id).c, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM exit_items WHERE exit_permit_id=?').get(id).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='exit' AND doc_id=?").get(id).c, 0);
 });
 
 test('scrap to_recycled deducts talef first then salem, adds muharraz, edit re-applies exactly', () => {
@@ -176,7 +187,7 @@ test('scrap to_stock returns talef as salem into warehouse', () => {
   assert.equal(getBalance(db, 1, 2).balance_pieces, 80);
 });
 
-test('scrap to_supplier moves stock out of warehouse, deducts buckets, void reverses', () => {
+test('scrap to_supplier moves stock out of warehouse, deducts buckets, delete reverses', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['scrap']);
   db.prepare('UPDATE items SET qty_salem=200, qty_talef=100 WHERE id=1').run();
@@ -188,8 +199,12 @@ test('scrap to_supplier moves stock out of warehouse, deducts buckets, void reve
   assert.equal(getBalance(db, 1, 2).balance_pieces, 40);
   assert.equal(buckets(db).t, 40);
   assert.equal(buckets(db).s, 200);
-  h['scrap:void'](null, id, 1);
-  assert.equal(db.prepare('SELECT status FROM scrap_movements WHERE id=?').get(id).status, 'void');
+  const imp = h['scrap:impact'](null, id);
+  assert.equal(imp.value, 60, 'القيمة المعروضة = حبات السند');
+  assert.equal(imp.deps.length, 0);
+  h['scrap:delete'](null, id, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements WHERE id=?').get(id).c, 0, 'يُمحى لا يُلغى');
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='scrap' AND doc_id=?").get(id).c, 0);
   assert.equal(buckets(db).t, 100);
   assert.equal(getBalance(db, 1, 2).balance_pieces, 100);
 });
@@ -229,7 +244,7 @@ test('scrap customer waste records only and appears in tolling balance', () => {
   assert.equal(bal.remaining, 9500);
 });
 
-test('transfers move between warehouses without bucket change and void reverses both', () => {
+test('transfers move between warehouses without bucket change and delete reverses both', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'transfers']);
   stockIn(db, h, 1, 1, 400);
@@ -248,7 +263,14 @@ test('transfers move between warehouses without bucket change and void reverses 
     doc_number: '3', doc_date: '2026-10-18', from_warehouse_id: 1, to_warehouse_id: 2,
     items: [{ item_id: 1, quantity: 99999, unit: 'حبة' }]
   }, 1), /مخزن المصدر/);
-  h['transfers:void'](null, id, 1);
+  // أثر النقل ساقان متقابلتان في المخزنين، وصفر على عدّاد الصنف — فالحذف لا يلمس العدّادات
+  const imp = h['transfers:impact'](null, id);
+  assert.deepEqual(imp.impact.map((r) => r.net).sort((a, b) => a - b), [-150, 150]);
+  h['transfers:delete'](null, id, 1);
   assert.equal(getBalance(db, 1, 1).balance_pieces, 400);
   assert.equal(getBalance(db, 1, 2).balance_pieces, 0);
+  assert.equal(buckets(db).s, 400);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM transfers WHERE id=?').get(id).c, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM transfer_items WHERE transfer_id=?').get(id).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='transfer' AND doc_id=?").get(id).c, 0);
 });

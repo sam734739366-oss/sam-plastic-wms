@@ -1,22 +1,25 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, openModal, esc , itemCombo, bucketOptions, bucketBadge} from '../ui.js';
+import {
+  toast, implicationsDialog, renderTable, attachRowMenu, rowActions, openModal, esc,
+  itemCombo, bucketOptions, bucketBadge, canWrite, unitOf,
+} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtNum, today } from '../fmt.js';
 
 register('exits', {
   title: 'تصاريح الخروج',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const rows = await api.invoke('exits:list');
       el.innerHTML = `
-        <div class="toolbar"><button class="btn primary" id="btn-add">+ تصريح خروج</button></div>
+        <div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ تصريح خروج</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
         <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
-      el.querySelector('#btn-add').onclick = () => form(null);
-      const active = rows.filter(r => r.status !== 'void');
+      if (writable) el.querySelector('#btn-add').onclick = () => form(null);
       el.querySelector('#summary').innerHTML =
-        `عدد التصاريح: <b>${rows.length}</b> — النشطة: <b>${active.length}</b> — إجمالي حبات النشطة: <b>${fmtNum(active.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
+        `عدد التصاريح: <b>${rows.length}</b> — إجمالي الحبات الخارجة: <b>${fmtNum(rows.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
@@ -24,20 +27,20 @@ register('exits', {
         { key: 'driver_name', label: 'السائق' },
         { key: 'car_number', label: 'السيارة', render: r => r.car_number || '—' },
         { key: 'destination', label: 'جهة التسليم', render: r => r.destination || '—' },
+        { key: 'items_count', label: 'البنود', render: r => fmtNum(r.items_count || 0, 0) },
         { key: 'total_pieces', label: 'الحبات', render: r => fmtNum(r.total_pieces, 0) },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
-        {
-          key: 'actions', label: '',
-          render: (r) => `<button class="btn mini" data-view="${r.id}">عرض</button>
-            <button class="btn mini" data-print="${r.id}">طباعة</button>
-            <button class="btn mini" data-edit="${r.id}">تعديل</button>
-            <button class="btn mini danger" data-void="${r.id}">إلغاء</button>`,
-        },
       ], rows);
-      el.querySelectorAll('[data-view]').forEach(b => b.onclick = () => view(Number(b.dataset.view)));
-      el.querySelectorAll('[data-print]').forEach(b => b.onclick = () => printDoc(Number(b.dataset.print)));
-      el.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => edit(Number(b.dataset.edit)));
-      el.querySelectorAll('[data-void]').forEach(b => b.onclick = () => voidDoc(Number(b.dataset.void)));
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => rowActions({
+        id: rows[ri].id,
+        entity: 'exits',
+        valueKind: 'pieces',
+        label: 'تصريح الخروج',
+        view: (id) => view(id),
+        print: (id) => printDoc(id),
+        edit: (id) => edit(id),
+        reload: load,
+        readOnly: !writable,
+      }));
     }
 
     async function printDoc(id) {
@@ -72,18 +75,6 @@ register('exits', {
           'ستُعكس حركة المخزون وأثر السليم الحالي ويُعاد تطبيق التصريح بالكميات الجديدة.',
         ]))) return;
         form(doc);
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('exits:get', id);
-        if (!(await implicationsDialog('إلغاء تصريح خروج', [
-          `سيُلغى أثر التصريح ${esc(doc.doc_number)} وتُعاد الكميات للمخزن وللسليم.`,
-        ]))) return;
-        await api.invoke('exits:void', id, currentUser().id);
-        toast('تم إلغاء التصريح', 'ok');
-        await load();
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
@@ -198,12 +189,12 @@ register('exits', {
             const b = row.querySelector('.p-bucket').value;
             const av = bal['qty_' + b] || 0;
             const bl = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' }[b];
-            balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} حبة`;
+            balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} ${unitOf(item)}`;
           } catch { balText.textContent = ''; }
           const pieces = toPieces(qty.value, unitSel.value, item);
           const kg = piecesToWeightKg(pieces || 0, item?.weight_grams || 0);
           calc.textContent = pieces != null
-            ? `${fmtNum(pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`
+            ? `${fmtNum(pieces, 0)} ${unitOf(item)}${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`
             : '—';
           updateTotal();
         }

@@ -1,12 +1,24 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc , itemCombo} from '../ui.js';
+import {
+  toast, renderTable, attachRowMenu, rowActions, openModal, esc, itemCombo, canWrite, unitOf,
+} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
 register('tolling', {
   title: 'النفخ للغير',
   async mount(el) {
+    const writable = canWrite();
+    // تعديل بسند موجود: يُجلب ثم يُفتح بنفس النموذج (الخلفية تردّ الأثر وتعيد تطبيقه)
+    async function receiptEdit(id, customers, items) {
+      try { receiptForm(await api.invoke('tolling:receiptGet', id), customers, items); }
+      catch (e) { toast(String(e.message || e), 'err'); }
+    }
+    async function deliveryEdit(id, customers, items) {
+      try { deliveryForm(await api.invoke('tolling:deliveryGet', id), customers, items); }
+      catch (e) { toast(String(e.message || e), 'err'); }
+    }
     async function load(tab = 'receipts') {
       const [items, parties, receipts, deliveries, balance] = await Promise.all([
         api.invoke('items:list'),
@@ -29,77 +41,65 @@ register('tolling', {
       el.querySelector('#tab-balance').onclick = () => load('balance');
 
       if (tab === 'receipts') {
-        body.innerHTML = `<div class="toolbar"><button class="btn primary" id="btn-add">+ سند استلام خام</button></div>
+        body.innerHTML = `<div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ سند استلام خام</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
           <div id="summary" class="summary-line"></div><div id="table-wrap"></div>`;
-        body.querySelector('#btn-add').onclick = () => receiptForm(null, customers, items);
-        const active = receipts.filter(r => r.status !== 'void');
+        if (writable) body.querySelector('#btn-add').onclick = () => receiptForm(null, customers, items);
         body.querySelector('#summary').innerHTML =
-          `عدد السندات: <b>${receipts.length}</b> — النشطة: <b>${active.length}</b> — إجمالي حبات النشطة: <b>${fmtNum(active.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
+          `عدد السندات: <b>${receipts.length}</b> — إجمالي الحبات المستلمة: <b>${fmtNum(receipts.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
         renderTable(body.querySelector('#table-wrap'), [
           { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
           { key: 'doc_date', label: 'التاريخ' },
           { key: 'party_name', label: 'العميل' },
           { key: 'items_count', label: 'البنود' },
           { key: 'total_pieces', label: 'الحبات', render: r => fmtNum(r.total_pieces, 0) },
-          { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
         ], receipts);
-        attachRowMenu(body.querySelector('#table-wrap'), (ri) => {
-          const r = receipts[ri];
-          return [
-            { label: 'عرض', open: true, onClick: () => receiptView(r.id) },
-            { label: 'طباعة', onClick: async () => {
-              try {
-                const doc = await api.invoke('tolling:receiptGet', r.id);
-                await api.invoke('print:open', { kind: 'toll_receipt', doc, settings: await api.invoke('settings:get') });
-              } catch (e) { toast(String(e.message || e), 'err'); }
-            } },
-            { label: 'تعديل', onClick: async () => {
-              const doc = await api.invoke('tolling:receiptGet', r.id);
-              receiptForm(doc, customers, items);
-            } },
-            { label: 'إلغاء', danger: true, onClick: async () => {
-              if (!(await confirmDialog('سيُلغى السند ويُخصم من رصيد العميل. متابعة؟'))) return;
-              try {
-                await api.invoke('tolling:receiptVoid', r.id, currentUser().id);
-                toast('تم الإلغاء', 'ok'); await load('receipts');
-              } catch (e) { toast(String(e.message || e), 'err'); }
-            } },
-          ];
-        });
+        attachRowMenu(body.querySelector('#table-wrap'), (ri) => rowActions({
+          id: receipts[ri].id,
+          impactChannel: 'tolling:receiptImpact',
+          deleteChannel: 'tolling:receiptDelete',
+          valueKind: 'pieces',
+          label: 'سند استلام الخام',
+          view: (id) => receiptView(id),
+          print: async (id) => {
+            try {
+              const doc = await api.invoke('tolling:receiptGet', id);
+              await api.invoke('print:open', { kind: 'toll_receipt', doc, settings: await api.invoke('settings:get') });
+            } catch (e) { toast(String(e.message || e), 'err'); }
+          },
+          edit: (id) => receiptEdit(id, customers, items),
+          reload: () => load('receipts'),
+          readOnly: !writable,
+        }));
       } else if (tab === 'deliveries') {
-        body.innerHTML = `<div class="toolbar"><button class="btn primary" id="btn-add">+ سند تسليم</button></div>
+        body.innerHTML = `<div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ سند تسليم</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
           <div id="summary" class="summary-line"></div><div id="table-wrap"></div>`;
-        body.querySelector('#btn-add').onclick = () => deliveryForm(null, customers, items);
-        const active = deliveries.filter(r => r.status !== 'void');
+        if (writable) body.querySelector('#btn-add').onclick = () => deliveryForm(null, customers, items);
         body.querySelector('#summary').innerHTML =
-          `عدد السندات: <b>${deliveries.length}</b> — النشطة: <b>${active.length}</b> — إجمالي قطع النشطة: <b>${fmtNum(active.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
+          `عدد السندات: <b>${deliveries.length}</b> — إجمالي القطع المسلَّمة: <b>${fmtNum(deliveries.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
         renderTable(body.querySelector('#table-wrap'), [
           { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
           { key: 'doc_date', label: 'التاريخ' },
           { key: 'party_name', label: 'العميل' },
           { key: 'total_pieces', label: 'القطع المسلمة', render: r => fmtNum(r.total_pieces, 0) },
           { key: 'invoice_number', label: 'فاتورة الأجرة', render: r => r.invoice_number || '—' },
-          { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
         ], deliveries);
-        attachRowMenu(body.querySelector('#table-wrap'), (ri) => {
-          const r = deliveries[ri];
-          return [
-            { label: 'عرض', open: true, onClick: () => deliveryView(r.id) },
-            { label: 'طباعة', onClick: async () => {
-              try {
-                const doc = await api.invoke('tolling:deliveryGet', r.id);
-                await api.invoke('print:open', { kind: 'toll_delivery', doc, settings: await api.invoke('settings:get') });
-              } catch (e) { toast(String(e.message || e), 'err'); }
-            } },
-            { label: 'إلغاء', danger: true, onClick: async () => {
-              if (!(await confirmDialog('سيُلغى سند التسليم ويُعاد لرصيد العميل. متابعة؟'))) return;
-              try {
-                await api.invoke('tolling:deliveryVoid', r.id, currentUser().id);
-                toast('تم الإلغاء', 'ok'); await load('deliveries');
-              } catch (e) { toast(String(e.message || e), 'err'); }
-            } },
-          ];
-        });
+        attachRowMenu(body.querySelector('#table-wrap'), (ri) => rowActions({
+          id: deliveries[ri].id,
+          impactChannel: 'tolling:deliveryImpact',
+          deleteChannel: 'tolling:deliveryDelete',
+          valueKind: 'pieces',
+          label: 'سند التسليم',
+          view: (id) => deliveryView(id),
+          print: async (id) => {
+            try {
+              const doc = await api.invoke('tolling:deliveryGet', id);
+              await api.invoke('print:open', { kind: 'toll_delivery', doc, settings: await api.invoke('settings:get') });
+            } catch (e) { toast(String(e.message || e), 'err'); }
+          },
+          edit: (id) => deliveryEdit(id, customers, items),
+          reload: () => load('deliveries'),
+          readOnly: !writable,
+        }));
       } else {
         renderTable(body, [
           { key: 'name', label: 'العميل' },
@@ -220,7 +220,7 @@ register('tolling', {
         function update() {
           const item = itemById(Number(itemSel.value));
           const pieces = item ? toPieces(qty.value, unitSel.value, item) : null;
-          calc.textContent = pieces != null && pieces > 0 ? fmtNum(pieces, 0) + ' حبة' : '';
+          calc.textContent = pieces != null && pieces > 0 ? fmtNum(pieces, 0) + ' ' + unitOf(item) : '';
           if (item && weightAuto) {
             let w = null;
             if (unitSel.value === 'كجم') w = parseFloat(qty.value) || null;
@@ -296,7 +296,7 @@ register('tolling', {
           </div>
           <table class="doc-lines">
             <thead><tr>
-              <th>بند الأجرة</th><th>الكمية (حبة)</th><th>السعر</th><th>الإجمالي</th><th></th>
+              <th>بند الأجرة</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th><th></th>
             </tr></thead>
             <tbody id="inv-rows"></tbody>
             <tfoot><tr>
@@ -400,7 +400,7 @@ register('tolling', {
         function update() {
           const item = itemById(Number(itemSel.value));
           const pieces = toPieces(qty.value, unitSel.value, item);
-          calc.textContent = pieces != null ? fmtNum(pieces, 0) + ' حبة' : '—';
+          calc.textContent = pieces != null ? fmtNum(pieces, 0) + ' ' + unitOf(item) : '—';
           updateTotal();
         }
         itemSel.onchange = refresh;

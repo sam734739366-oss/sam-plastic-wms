@@ -1,7 +1,19 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const docDelete = require('../docDelete');
 const ledger = require('../ledger');
+
+// سند القبض/الدفع: دفتر نقدي وذمم فقط — بلا أي حركة مخزون، فالحذف يمح قيده من الدفتر
+// ولا يمسّ العدّادات. لا شيء يتفرع إلى السند، لذا حذفه مباشر.
+const PAYMENT_SPEC = {
+  table: 'payments',
+  moveTypes: [],
+  ledgerType: 'payment',
+  auditEntity: 'payment',
+  value: (db, id) => db.prepare('SELECT COALESCE(amount,0) a FROM payments WHERE id=?').get(id).a,
+  deps: [],
+};
 
 // سندات القبض والدفع النقدي:
 // قبض (in): يخفض ذمة العميل ويضيف للنقدية — دفع (out): يخفض ذمتنا للمورد ويخصم من النقدية
@@ -45,7 +57,7 @@ module.exports = function register(ipcMain) {
           .run(number, doc.doc_date, doc.party_id, doc.direction, amount, doc.notes || null, userId).lastInsertRowid;
       }
       // الأثر المحاسبي: القبض يخفض ذمة الطرف ويزيد النقدية، والدفع عكسه
-      ledger.voidDoc(db, 'payment', id);
+      ledger.deleteDoc(db, 'payment', id);
       if (doc.direction === 'in') {
         ledger.write(db, {
           party_id: doc.party_id, doc_type: 'payment', doc_id: id,
@@ -68,15 +80,7 @@ module.exports = function register(ipcMain) {
     return { id };
   });
 
-  ipcMain.handle('payments:void', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM payments WHERE id=?').get(id);
-    if (!before) throw new Error('السند غير موجود');
-    withTransaction(db, () => {
-      ledger.voidDoc(db, 'payment', id);
-      db.prepare(`UPDATE payments SET status='void' WHERE id=?`).run(id);
-    });
-    audit(db, userId, 'void', 'payment', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('payments:impact', (e, id) => docDelete.impact(getDb(), PAYMENT_SPEC, id));
+
+  ipcMain.handle('payments:delete', (e, id, userId) => docDelete.hardDelete(getDb(), PAYMENT_SPEC, id, userId));
 };

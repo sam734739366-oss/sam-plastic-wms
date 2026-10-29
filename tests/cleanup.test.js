@@ -44,12 +44,12 @@ function buildFixture() {
   db.prepare(`INSERT INTO parties (name, type) VALUES
     ('مورد البلاستيك','supplier'), ('عميل تجاري','customer'),
     ('عميل نفخ','customer'), ('طرف مزدوج','both')`).run();
-  db.prepare(`INSERT INTO items (code, name, unit_name, weight_grams, qty_salem)
-    VALUES ('A001','عبوة','حبة',10,5000), ('B002','علبة','حبة',20,2000)`).run();
+  db.prepare(`INSERT INTO items (code, name, unit_name, weight_grams, qty_salem, opening_warehouse_id)
+    VALUES ('A001','عبوة','حبة',10,5000,1), ('B002','علبة','حبة',20,2000,1)`).run();
   db.prepare(`INSERT INTO stock_moves (doc_type, doc_id, doc_number, doc_date, item_id, warehouse_id, qty_in_pieces, weight_in_kg, bucket, notes)
     VALUES ('opening',1,'افتتاحي-A001','2026-10-01',1,1,5000,50,'salem','رصيد افتتاحي (سليم)'),
            ('opening',2,'افتتاحي-B002','2026-10-01',2,1,2000,40,'salem','رصيد افتتاحي (سليم)')`).run();
-  const h = stubIpc('purchases', 'issues', 'receives', 'transfers', 'scrap',
+  const h = stubIpc('purchases', 'issues', 'production', 'transfers', 'scrap',
     'sales', 'exits', 'returns', 'payments', 'tolling');
   // شراء خام (يبقى)
   const { id: purId } = h['purchases:save'](null, {
@@ -160,6 +160,9 @@ test('حذف الأقسام الملغاة: يمسح البيع والخروج �
     const openA = db.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0) s FROM stock_moves
       WHERE doc_type='opening' AND item_id=? AND bucket='salem'`).get(a.id).s;
     assert.equal(openA, 4650, 'الافتتاح الجديد يمتص أثر حركات البيع والخروج المحذوفة');
+    assert.equal(db.prepare(`SELECT warehouse_id w FROM stock_moves
+      WHERE doc_type='opening' AND item_id=? AND bucket='salem'`).get(a.id).w, a.opening_warehouse_id,
+      'الافتتاح المُعاد بناؤه يستقر في مخزن الافتتاح المسجل للصنف');
     // الجرد يعرض نفس الكميات الحالية للمخزن
     assert.equal(getBalance(db, a.id, 1).balance_pieces, 5450, 'جرد A001 بالمخزن الرئيسي (سليم 5400 + محرز 50)');
     assert.equal(getBalance(db, a.id, 2).balance_pieces, 100, 'جرد A001 بمخزن الصابون بعد النقل');
@@ -196,6 +199,50 @@ test('الحذف على قاعدة بلا بيانات ملغاة: لا يحذف
     assert.deepEqual(removed, { sale_invoices: 0, sale_returns: 0, exits: 0, payments: 0, parties: 0 });
     assertConsistent(db, 'قاعدة نظيفة');
     assert.equal(db.prepare('SELECT COUNT(*) c FROM parties').get().c, 1, 'المورد باقٍ');
+  } finally {
+    db.close();
+  }
+});
+
+// استلام الإنتاج الموحّد (v2) مستند باقٍ مثل المخازن: لا يُمسّ صفّه ولا حركاته ولا أثره
+test('الحذف لا يمسّ سند استلام الإنتاج: صفّه وحركاته وعدّاداته باقية', () => {
+  const db = makeDb(); setDb(db);
+  db.prepare("INSERT INTO warehouses (name) VALUES ('المخزن الرئيسي')").run();
+  db.prepare("INSERT INTO parties (name,type) VALUES ('مورد','supplier')").run();
+  db.prepare("INSERT INTO items (code, name, unit_name, weight_grams, pieces_per_carton) VALUES ('RAW','خام','حبة',10,1000)").run();
+  db.prepare("INSERT INTO items (code, name, unit_name, weight_grams) VALUES ('FG','عبوة','عبوة',20)").run();
+  const h = stubIpc('purchases', 'issues', 'production', 'sales');
+  const { id: purId } = h['purchases:save'](null, {
+    doc_number: 'CLP-1', doc_date: '2026-10-20', party_id: 1,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_prefix: 'CK-' }],
+  }, 1);
+  const carton = db.prepare('SELECT id FROM cartons WHERE purchase_id=?').get(purId);
+  const { id: issId } = h['issues:save'](null, {
+    doc_number: 'CLI-1', doc_date: '2026-10-20', source: 'own',
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: ['CK-1'] }],
+  }, 1);
+  const { id: recId } = h['production:save'](null, {
+    doc_number: 'CLR-1', doc_date: '2026-10-21', issue_permit_id: issId, fg_item_id: 2, warehouse_id: 1,
+    cartons: [{ carton_id: carton.id, good_pieces: 900, defect_before_pieces: 50, defect_after_pieces: 50 }],
+  }, 1);
+  // فاتورة بيع على التام (من الأقسام الملغاة) لتحريك الدفتر والحركات
+  h['sales:save'](null, {
+    doc_number: 'CLV-1', doc_date: '2026-10-21', invoice_type: 'sale', party_id: 1, payment_method: 'credit',
+    items: [{ item_id: 2, warehouse_id: 1, quantity: 100, unit: 'عبوة', unit_price: 50 }],
+  }, 1);
+  const movesBefore = db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='production' AND doc_id=?").get(recId).c;
+  try {
+    const removed = removeNonWarehouseData(db);
+    assert.equal(removed.sale_invoices, 1, 'الفاتورة الملغاة الأقسام هي المحذوفة');
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM production_receipts WHERE id=?').get(recId).c, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) c FROM production_receipt_cartons WHERE receipt_id=?').get(recId).c, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='production' AND doc_id=?").get(recId).c,
+      movesBefore, 'حركات الاستلام لم تمسّها الإزالة');
+    assert.equal(db.prepare("SELECT status FROM cartons WHERE id=?").get(carton.id).status, 'finished');
+    // التطابق الأساسي يبقى بعد الإزالة: العدّاد = صافي الحركات لكل سلة
+    assertConsistent(db, 'بعد إزالة الأقسام الملغاة');
+    assert.equal(db.prepare('SELECT qty_salem FROM items WHERE id=2').get().qty_salem, 800,
+      'تام سليم: 900 من الاستلام − 100 بيع حُذف مستنده فامتصه الافتتاح');
   } finally {
     db.close();
   }

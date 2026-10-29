@@ -25,4 +25,28 @@ function nextCartonNumbers(db, prefix, count) {
   return nums;
 }
 
-module.exports = { suggestNumber, checkDocNumber, nextCartonNumbers };
+// ===== الحذف الفعلي (v2) =====
+// لا حالة «ملغى»: المستند يُحذف هو وحركاته وقيوده وتُردّ عدّاداته فوراً.
+// قبل الحذف يُفحص ما تفرّع عنه، فيُمنع برسالة تذكر أرقام المستندات الأحدث بالاسم.
+
+// checks: [{ label, sql, params }] — كل استعلام يُرجع صفاً واحداً على الأقل = مانع
+function dependencies(db, checks = []) {
+  const found = [];
+  for (const c of checks) {
+    const rows = db.prepare(c.sql).all(...(c.params || []));
+    for (const r of rows) {
+      const number = r.doc_number ?? r.carton_number ?? r.number ?? '';
+      found.push({ label: c.label, number });
+    }
+  }
+  return found;
+}
+
+function assertNoDependencies(db, checks = []) {
+  const deps = dependencies(db, checks);
+  if (!deps.length) return;
+  const lines = deps.map((d) => `• ${d.label}${d.number ? ' ' + d.number : ''}`);
+  throw new Error(`لا يمكن الحذف — المستند مرتبط بمستندات أحدث:\n${lines.join('\n')}\nاحذف الأحدث أولاً ثم أعد المحاولة.`);
+}
+
+module.exports = { suggestNumber, checkDocNumber, nextCartonNumbers, dependencies, assertNoDependencies };

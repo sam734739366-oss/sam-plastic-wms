@@ -123,41 +123,39 @@ updBtn.onclick = async () => {
 loadUpdateStatus();
 
 // الشاشات المتاحة لكل دور — null تعني كل الشاشات (المدير)
+// ملاحظة v2: «نتيجة الإنتاج» و«استلام التام» اندمجتا في «استلام الإنتاج» (production)،
+// فلم يعد لهاتين الشاشتين وجود. ودور «عرض فقط» لا يملك أي صلاحية حفظ أو حذف:
+// الأزرار تُخفى من الشاشات نفسها عبر canWrite() في ui.js، هذه القائمة تتحكم في الوصول فقط.
 const ROLE_SCREENS = {
   manager: null,
-  clerk: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
-    'purchases', 'issues', 'production', 'receives', 'cartons', 'returns',
-    'posting', 'salesreturns',
-    'scrap', 'tolling', 'transfers', 'stock', 'reports'],
-  viewer: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
-    'purchases', 'issues', 'production', 'receives', 'cartons', 'returns',
-    'posting', 'salesreturns',
-    'scrap', 'tolling', 'transfers', 'stock', 'reports', 'audit'],
-  warehouse: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts',
-    'purchases', 'issues', 'production', 'receives', 'cartons', 'scrap', 'transfers', 'stock', 'returns',
-    'posting', 'salesreturns',
-    'reports'],
+  clerk: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts', 'stock', 'cartons',
+    'purchases', 'issues', 'production', 'returns', 'salesreturns', 'posting', 'sales',
+    'exits', 'scrap', 'tolling', 'transfers', 'payments', 'statements', 'reports'],
+  viewer: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts', 'stock', 'cartons',
+    'purchases', 'issues', 'production', 'returns', 'salesreturns', 'posting', 'sales',
+    'exits', 'scrap', 'tolling', 'transfers', 'payments', 'statements', 'reports', 'audit', 'guide'],
+  warehouse: ['dashboard', 'items', 'parties', 'warehouses', 'machines', 'shifts', 'stock', 'cartons',
+    'purchases', 'issues', 'production', 'returns', 'salesreturns', 'exits', 'scrap', 'transfers', 'tolling', 'reports'],
 };
 const allowed = (screen) => {
   const list = ROLE_SCREENS[u.role];
   if (!list) return true;
   return list.includes(screen);
 };
+// دور «عرض فقط»: لا إنشاء ولا تعديل ولا حذف في أي شاشة
+if (u.role === 'viewer') document.body.classList.add('is-viewer');
 
 document.querySelectorAll('.nav-item').forEach(a => {
   if (!allowed(a.dataset.screen)) a.remove();
   else a.onclick = () => go(a.dataset.screen);
 });
 // إخفاء عناوين المجموعات التي صارت فارغة بعد فلترة الأدوار
-document.querySelectorAll('#nav .nav-group').forEach(g => {
-  let next = g.nextElementSibling;
-  let hasItem = false;
-  while (next && !next.classList.contains('nav-group')) {
-    if (next.classList.contains('nav-item')) { hasItem = true; break; }
-    next = next.nextElementSibling;
-  }
-  if (!hasItem) g.remove();
+const groups = [];
+document.querySelectorAll('#nav > *').forEach(node => {
+  if (node.classList.contains('nav-group')) { groups.push({ head: node, items: 0 }); return; }
+  if (groups.length && node.classList.contains('nav-item')) groups[groups.length - 1].items += 1;
 });
+for (const g of groups) if (!g.items) g.head.remove();
 
 initWM(document.getElementById('desktop'), document.getElementById('taskbar'));
 
@@ -183,14 +181,17 @@ import './screens/shifts.js';
 import './screens/purchases.js';
 import './screens/issues.js';
 import './screens/production.js';
-import './screens/receives.js';
 import './screens/cartons.js';
 import './screens/returns.js';
+import './screens/sales.js';
 import './screens/posting.js';
 import './screens/salesreturns.js';
+import './screens/exits.js';
 import './screens/scrap.js';
 import './screens/tolling.js';
 import './screens/transfers.js';
+import './screens/payments.js';
+import './screens/statements.js';
 import './screens/stock.js';
 import './screens/reports.js';
 import './screens/audit.js';

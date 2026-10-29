@@ -17,14 +17,15 @@ function createMainWindow() {
 const KIND_TEMPLATE = {
   purchase: templates.purchaseTemplate,
   issue: templates.issueTemplate,
-  receive: templates.receiveTemplate,
+  // «استلام الإنتاج» حلّ محل استلام التام ونتيجة الإنتاج — النوعان قديمًا يذهبان لنفس السند
+  receive: templates.productionReceiptTemplate,
   invoice: templates.invoiceTemplate,
   exit: templates.exitTemplate,
   toll_receipt: templates.tollReceiptTemplate,
   toll_delivery: templates.tollDeliveryTemplate,
   scrap: templates.scrapTemplate,
   transfer: templates.transferTemplate,
-  production: templates.productionTemplate,
+  production: templates.productionReceiptTemplate,
   payment: templates.paymentTemplate,
   sale_return: templates.returnTemplate,
   purchase_return: templates.returnTemplate,

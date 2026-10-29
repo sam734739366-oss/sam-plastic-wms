@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
-const { setDb, migrate } = require('../src/db');
+const { setDb, seed, SCHEMA_VERSION } = require('../src/db');
 
 function makeDb() {
   const d = new DatabaseSync(':memory:');
@@ -51,62 +51,32 @@ test('الأدوار الملغاة (حسابات/مبيعات) وأي دور غ
     /دور المستخدم غير معروف/);
 });
 
-test('ترحيل قاعدة قديمة بقيد الأدوار القديم: يوسع الأدوار ويحافظ على المستخدمين', () => {
-  const d = new DatabaseSync(':memory:');
-  d.exec(`
-    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, full_name TEXT, password_hash TEXT,
-      role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('manager','clerk','viewer')), created_at TEXT);
-    CREATE TABLE parties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, type TEXT);
-    CREATE TABLE warehouses (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, location TEXT);
-    CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, name TEXT, item_group INTEGER, unit_name TEXT, weight_grams REAL, pieces_per_carton INTEGER, pieces_per_shadda INTEGER, pieces_per_bag INTEGER, qty_salem INTEGER DEFAULT 0, qty_talef INTEGER DEFAULT 0, qty_muharraz INTEGER DEFAULT 0);
-    CREATE TABLE purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT UNIQUE, doc_date TEXT, party_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT UNIQUE, doc_date TEXT, party_id INTEGER, invoice_type TEXT DEFAULT 'sale', notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE stock_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_type TEXT, doc_id INTEGER, doc_number TEXT, doc_date TEXT, item_id INTEGER, warehouse_id INTEGER, qty_in_pieces INTEGER DEFAULT 0, qty_out_pieces INTEGER DEFAULT 0, weight_in_kg REAL DEFAULT 0, weight_out_kg REAL DEFAULT 0, bucket TEXT, notes TEXT);
-    CREATE TABLE scrap_movements (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, item_id INTEGER, disposition TEXT, warehouse_id INTEGER, party_id INTEGER, pieces INTEGER, weight_kg REAL, price REAL, notes TEXT, status TEXT DEFAULT 'active');
-    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
-  `);
-  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('admin','المدير','x','manager')").run();
-  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('old','قديم','x','clerk')").run();
-  d.prepare('INSERT INTO warehouses (name) VALUES (?)').run('المخزن الرئيسي');
-  d.exec(fs.readFileSync(path.join(__dirname, '..', 'src', 'schema.sql'), 'utf8'));
-  migrate(d);
-  // المستخدمون القدامى باقون بأدوارهم
-  assert.equal(d.prepare("SELECT COUNT(*) c FROM users").get().c, 2);
-  assert.equal(d.prepare("SELECT role FROM users WHERE username='old'").get().role, 'clerk');
-  // الدور الجديد أصبح مقبولاً بعد الترحيل
-  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('store2','مخازن','x','warehouse')").run();
-  assert.equal(d.prepare("SELECT role FROM users WHERE username='store2'").get().role, 'warehouse');
-  // والقيد الجديد يرفض ما ليس دوراً معروفاً
-  assert.throws(() => d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('bad','سيئ','x','admin')").run());
+test('قيد الأدوار في مخطط v2 يقبل الأربعة ويرفض الملغاة على مستوى القاعدة', () => {
+  const d = makeDb();
+  const add = (u, role) => d.prepare('INSERT INTO users (username, full_name, password_hash, role) VALUES (?,?,?,?)')
+    .run(u, u, 'x', role);
+  for (const role of ['manager', 'clerk', 'viewer', 'warehouse']) add(`u-${role}`, role);
+  assert.deepEqual(d.prepare('SELECT username, role FROM users WHERE username LIKE \'u-%\' ORDER BY username').all()
+    .map((r) => `${r.username}:${r.role}`),
+    ['u-clerk:clerk', 'u-manager:manager', 'u-viewer:viewer', 'u-warehouse:warehouse']);
+  // الأدوار الملغاة أو المجهولة يرفضها القيد نفسه — لا ترحيل لقاعدة قديمة يحملها
+  for (const role of ['admin', 'accounts', 'sales', '']) {
+    assert.throws(() => add(`bad-${role || 'empty'}`, role), /CHECK constraint failed/, `دور مرفوض: ${role}`);
+  }
 });
 
-test('ترحيل قاعدة بدورَي حسابات ومبيعات: يتحول أصحابهما إلى إدخال عام ويُسقط الدوران من القيد', () => {
-  const d = new DatabaseSync(':memory:');
-  d.exec(`
-    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, full_name TEXT, password_hash TEXT,
-      role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('manager','clerk','viewer','warehouse','accounts','sales')), created_at TEXT);
-    CREATE TABLE parties (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, type TEXT);
-    CREATE TABLE warehouses (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, location TEXT);
-    CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, name TEXT, item_group INTEGER, unit_name TEXT, weight_grams REAL, pieces_per_carton INTEGER, pieces_per_shadda INTEGER, pieces_per_bag INTEGER, qty_salem INTEGER DEFAULT 0, qty_talef INTEGER DEFAULT 0, qty_muharraz INTEGER DEFAULT 0);
-    CREATE TABLE purchases (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT UNIQUE, doc_date TEXT, party_id INTEGER, notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT UNIQUE, doc_date TEXT, party_id INTEGER, invoice_type TEXT DEFAULT 'sale', notes TEXT, status TEXT DEFAULT 'active', created_by INTEGER, created_at TEXT);
-    CREATE TABLE stock_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_type TEXT, doc_id INTEGER, doc_number TEXT, doc_date TEXT, item_id INTEGER, warehouse_id INTEGER, qty_in_pieces INTEGER DEFAULT 0, qty_out_pieces INTEGER DEFAULT 0, weight_in_kg REAL DEFAULT 0, weight_out_kg REAL DEFAULT 0, bucket TEXT, notes TEXT);
-    CREATE TABLE scrap_movements (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_number TEXT, doc_date TEXT, item_id INTEGER, disposition TEXT, warehouse_id INTEGER, party_id INTEGER, pieces INTEGER, weight_kg REAL, price REAL, notes TEXT, status TEXT DEFAULT 'active');
-    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
-  `);
-  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('admin','المدير','x','manager')").run();
-  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('acc','محاسب','x','accounts')").run();
-  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('sell','مندوب','x','sales')").run();
+test('تهيئة قاعدة v2 (seed) تُبقي مستخدميها بأدوارهم وتكتب إصدار المخطط المانع للأرشفة', () => {
+  const d = makeDb();
+  d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('old','قديم','x','clerk')").run();
   d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('store','أمين','x','warehouse')").run();
-  d.prepare('INSERT INTO warehouses (name) VALUES (?)').run('المخزن الرئيسي');
-  d.exec(fs.readFileSync(path.join(__dirname, '..', 'src', 'schema.sql'), 'utf8'));
-  migrate(d);
-  // أصحاب الدورين الملغيين صاروا إدخال عام، والبقية على أدوارهم
-  assert.equal(d.prepare("SELECT role FROM users WHERE username='acc'").get().role, 'clerk');
-  assert.equal(d.prepare("SELECT role FROM users WHERE username='sell'").get().role, 'clerk');
-  assert.equal(d.prepare("SELECT role FROM users WHERE username='store'").get().role, 'warehouse');
-  assert.equal(d.prepare("SELECT role FROM users WHERE username='admin'").get().role, 'manager');
-  // القيد الجديد يرفض الدورين الملغيين
-  assert.throws(() => d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('a2','X','x','accounts')").run());
-  assert.throws(() => d.prepare("INSERT INTO users (username, full_name, password_hash, role) VALUES ('s2','X','x','sales')").run());
+  // تهيئة الإقلاع على قاعدة v2: لا إعادة تسمية أدوار ولا فقد مستخدم — الترحيل انتهى
+  seed(d);
+  seed(d);
+  const users = d.prepare('SELECT username, role FROM users ORDER BY id').all();
+  assert.deepEqual(users.map((u) => `${u.username}:${u.role}`),
+    ['admin:manager', 'old:clerk', 'store:warehouse'], 'المستخدمون بأدوارهم كما كانوا');
+  // المفتاح الذي يميّز قاعدة v2: وجوده يمنع أرشفة القاعدة عند الإقلاع التالي
+  assert.equal(d.prepare("SELECT value FROM settings WHERE key='schema_version'").get().value, String(SCHEMA_VERSION));
+  assert.equal(d.prepare('SELECT COUNT(*) c FROM warehouses').get().c, 1, 'مخزن واحد افتراضي');
+  assert.equal(d.prepare("SELECT COUNT(*) c FROM shifts WHERE name IN ('صباحية','مسائية')").get().c, 2);
 });

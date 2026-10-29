@@ -1,8 +1,19 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance, applyBucketsDelta } = require('../stock');
+const { writeMoves, getBalance, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const docDelete = require('../docDelete');
+
+// تصريح الخروج مستند نهائي: لا شيء يتفرع عنه، فالحذف مباشر.
+// الحذف يردّ الخصم الذي أحدثه على سلات أصنافه ثم يمحو حركاته.
+const EXIT_SPEC = {
+  table: 'exit_permits',
+  docType: 'exit',
+  auditEntity: 'exit_permit',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(pieces),0) t FROM exit_items WHERE exit_permit_id=?').get(id).t,
+  deps: [],
+};
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('exits:suggest', () => suggestNumber(getDb(), 'exit_permits'));
@@ -80,17 +91,7 @@ module.exports = function register(ipcMain) {
     return { id };
   });
 
-  ipcMain.handle('exits:void', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM exit_permits WHERE id=?').get(id);
-    if (!before) throw new Error('التصريح غير موجود');
-    const oldItems = db.prepare('SELECT * FROM exit_items WHERE exit_permit_id=?').all(id);
-    withTransaction(db, () => {
-      voidDoc(db, 'exit', id, userId);
-      applyBucketsDelta(db, oldItems, 1);
-      db.prepare(`UPDATE exit_permits SET status='void' WHERE id=?`).run(id);
-    });
-    audit(db, userId, 'void', 'exit_permit', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('exits:impact', (e, id) => docDelete.impact(getDb(), EXIT_SPEC, id));
+
+  ipcMain.handle('exits:delete', (e, id, userId) => docDelete.hardDelete(getDb(), EXIT_SPEC, id, userId));
 };

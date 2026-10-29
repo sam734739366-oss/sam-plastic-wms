@@ -31,7 +31,7 @@ function registerHandlers(d) {
   return fns;
 }
 
-test('dashboard:charts يعيد 6 أشهر بالمجاميع الصحيحة ويتجاهل الملغى والخارج عن النافذة', () => {
+test('dashboard:charts يعيد 6 أشهر بالمجاميع الصحيحة ويتجاهل المحذوف والخارج عن النافذة', () => {
   const d = memDb();
   d.prepare('INSERT INTO warehouses (name) VALUES (?)').run('مخزن 1');
   d.prepare('INSERT INTO parties (name, type) VALUES (?,?)').run('عميل أ', 'customer');
@@ -41,32 +41,35 @@ test('dashboard:charts يعيد 6 أشهر بالمجاميع الصحيحة و�
   addItem.run('T-1', 'صنف أول', 2, 'حبة', 1000, 50, 200);
   addItem.run('T-2', 'صنف ثاني', 2, 'حبة', 300, 0, 40);
   addItem.run('T-3', 'صنف صفري', 2, 'حبة', 0, 0, 0);
-  const addPur = d.prepare(`INSERT INTO purchases (doc_number, doc_date, party_id, status)
-    VALUES (?,?,?,?)`);
+  const addPur = d.prepare(`INSERT INTO purchases (doc_number, doc_date, party_id)
+    VALUES (?,?,?)`);
   const addPurItem = d.prepare(`INSERT INTO purchase_items
-    (purchase_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, total_price)
-    VALUES (?,?,?,?,?,?,?,?)`);
-  const addInv = d.prepare(`INSERT INTO invoices (doc_number, doc_date, party_id, status)
+    (purchase_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, total_price, bucket)
+    VALUES (?,?,?,?,?,?,?,?,?)`);
+  const addInv = d.prepare(`INSERT INTO invoices (doc_number, doc_date, party_id, invoice_type)
     VALUES (?,?,?,?)`);
   const addInvItem = d.prepare(`INSERT INTO invoice_items
-    (invoice_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, total_price)
-    VALUES (?,?,?,?,?,?,?,?)`);
+    (invoice_id, item_id, warehouse_id, quantity, unit, pieces, weight_kg, total_price, bucket)
+    VALUES (?,?,?,?,?,?,?,?,?)`);
 
-  // مشتريات: الشهر الحالي 5000، قبل شهر 3000، قبل 6 أشهر 9000 (خارج النافذة)، ملغاة 777
-  const pCur = addPur.run('P-CUR', dayInMonthAgo(0), 2, 'active').lastInsertRowid;
-  addPurItem.run(pCur, 1, 1, 1, 'حبة', 1, 0, 5000);
-  const pM1 = addPur.run('P-M1', dayInMonthAgo(1), 2, 'active').lastInsertRowid;
-  addPurItem.run(pM1, 1, 1, 1, 'حبة', 1, 0, 3000);
-  const pM6 = addPur.run('P-M6', dayInMonthAgo(6), 2, 'active').lastInsertRowid;
-  addPurItem.run(pM6, 1, 1, 1, 'حبة', 1, 0, 9000);
-  const pVoid = addPur.run('P-VOID', dayInMonthAgo(0), 2, 'void').lastInsertRowid;
-  addPurItem.run(pVoid, 1, 1, 1, 'حبة', 1, 0, 777);
+  // مشتريات: الشهر الحالي 5000، قبل شهر 3000، قبل 6 أشهر 9000 (خارج النافذة)، محذوفة 777
+  const pCur = addPur.run('P-CUR', dayInMonthAgo(0), 2).lastInsertRowid;
+  addPurItem.run(pCur, 1, 1, 1, 'حبة', 1, 0, 5000, 'salem');
+  const pM1 = addPur.run('P-M1', dayInMonthAgo(1), 2).lastInsertRowid;
+  addPurItem.run(pM1, 1, 1, 1, 'حبة', 1, 0, 3000, 'salem');
+  const pM6 = addPur.run('P-M6', dayInMonthAgo(6), 2).lastInsertRowid;
+  addPurItem.run(pM6, 1, 1, 1, 'حبة', 1, 0, 9000, 'salem');
+  // في v2 لا يوجد «ملغى»: السند المحذوف يُمحى صفّه وحركاته، فلا يظهر في المخطط
+  const pDel = addPur.run('P-DEL', dayInMonthAgo(0), 2).lastInsertRowid;
+  addPurItem.run(pDel, 1, 1, 1, 'حبة', 1, 0, 777, 'salem');
+  d.prepare('DELETE FROM purchase_items WHERE purchase_id=?').run(pDel);
+  d.prepare('DELETE FROM purchases WHERE id=?').run(pDel);
 
   // مبيعات: الشهر الحالي 2000، قبل شهرين 4000
-  const iCur = addInv.run('I-CUR', dayInMonthAgo(0), 1, 'active').lastInsertRowid;
-  addInvItem.run(iCur, 1, 1, 1, 'حبة', 1, 0, 2000);
-  const iM2 = addInv.run('I-M2', dayInMonthAgo(2), 1, 'active').lastInsertRowid;
-  addInvItem.run(iM2, 1, 1, 1, 'حبة', 1, 0, 4000);
+  const iCur = addInv.run('I-CUR', dayInMonthAgo(0), 1, 'sale').lastInsertRowid;
+  addInvItem.run(iCur, 1, 1, 1, 'حبة', 1, 0, 2000, 'salem');
+  const iM2 = addInv.run('I-M2', dayInMonthAgo(2), 1, 'sale').lastInsertRowid;
+  addInvItem.run(iM2, 1, 1, 1, 'حبة', 1, 0, 4000, 'salem');
 
   // دفتر: ذمة عميل 1200، ذمة مورد 800، نقدية 5000 داخلة و1500 خارجة
   const addLed = d.prepare(`INSERT INTO party_ledger
@@ -92,8 +95,10 @@ test('dashboard:charts يعيد 6 أشهر بالمجاميع الصحيحة و�
   assert.equal(c.monthly[5].sales, 2000);
   assert.equal(c.monthly[3].sales, 4000);      // قبل شهرين
   assert.equal(c.monthly[2].purchases, 0);     // قبل 3 أشهر بلا حركة
-  // الخارج عن النافذة والملغى لا يظهران في أي شهر
+  // الخارج عن النافذة والمحذوف لا يظهران في أي شهر
   assert.equal(c.monthly.reduce((a, m) => a + m.purchases, 0), 8000);
+  assert.equal(d.prepare("SELECT COUNT(*) c FROM purchases WHERE doc_number IN ('P-DEL','P-VOID')").get().c, 0,
+    'الحذف الفعلي لا يترك صفاً معلّماً في الجدول');
 
   // التوزيع: مجموع سليم 1300 / تالف 50 / محرز 240
   assert.deepEqual(c.buckets, [

@@ -1,11 +1,28 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance, applyBucketsDelta } = require('../stock');
+const { writeMoves, getBalance, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const docDelete = require('../docDelete');
 const ledger = require('../ledger');
 
 const TYPE_LABEL = { sale: 'بيع', scrap: 'خردة', blowing_fee: 'أجرة نفخ' };
+
+// الفاتورة هي أصل مرتجع البيع وسند تسليم الأجرة: كلاهما يشير إليها بصفاً حياً،
+// فلا حذف ولا تعديل لكمياتها قبل حذف ما تفرع عنها (وإلا بقي المرتجع بلا فاتورة يُنسب إليها).
+const INVOICE_SPEC = {
+  table: 'invoices',
+  docType: 'invoice',
+  ledgerType: 'invoice',
+  auditEntity: 'invoice',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(total_price),0) t FROM invoice_items WHERE invoice_id=?').get(id).t,
+  deps: [
+    (db, id) => db.prepare('SELECT doc_number FROM sales_returns WHERE invoice_id=?').all(id)
+      .map((r) => ({ label: 'مرتجع بيع', number: r.doc_number })),
+    (db, id) => db.prepare('SELECT doc_number FROM customer_deliveries WHERE invoice_id=?').all(id)
+      .map((r) => ({ label: 'سند تسليم عميل', number: r.doc_number })),
+  ],
+};
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('sales:suggest', () => suggestNumber(getDb(), 'invoices'));
@@ -47,6 +64,9 @@ module.exports = function register(ipcMain) {
     withTransaction(db, () => {
       let oldItems = [];
       if (id) {
+        // التعديل يمسح بنود الفاتورة ويعيد كتابتها، فمرتجعاتها وتسليماتها تسقط referencesها
+        const deps = docDelete.collectDeps(db, INVOICE_SPEC, id);
+        if (deps.length) throw new Error(docDelete.depsMessage(deps));
         oldItems = db.prepare('SELECT * FROM invoice_items WHERE invoice_id=?').all(id);
         db.prepare('DELETE FROM invoice_items WHERE invoice_id=?').run(id);
         db.prepare(`UPDATE invoices SET doc_number=?, doc_date=?, party_id=?, invoice_type=?, driver_name=?, car_number=?, notes=?, payment_method=? WHERE id=?`)
@@ -92,22 +112,7 @@ module.exports = function register(ipcMain) {
     return { id };
   });
 
-  ipcMain.handle('sales:void', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
-    if (!before) throw new Error('الفاتورة غير موجودة');
-    const linked = db.prepare(`SELECT COUNT(*) c FROM customer_deliveries WHERE invoice_id=? AND status='active'`).get(id).c;
-    if (linked > 0) throw new Error('لا يمكن إلغاء الفاتورة — مرتبطة بسند تسليم نشط، ألغِ التسليم أولاً');
-    const returned = db.prepare(`SELECT COUNT(*) c FROM sales_returns WHERE invoice_id=? AND status='active'`).get(id).c;
-    if (returned > 0) throw new Error('لا يمكن إلغاء الفاتورة — توجد مرتجعات نشطة عليها، ألغِ المرتجع أولاً');
-    const oldItems = db.prepare('SELECT * FROM invoice_items WHERE invoice_id=?').all(id);
-    withTransaction(db, () => {
-      voidDoc(db, 'invoice', id, userId);
-      if (before.invoice_type !== 'blowing_fee') applyBucketsDelta(db, oldItems, 1);
-      ledger.voidDoc(db, 'invoice', id);
-      db.prepare(`UPDATE invoices SET status='void' WHERE id=?`).run(id);
-    });
-    audit(db, userId, 'void', 'invoice', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('sales:impact', (e, id) => docDelete.impact(getDb(), INVOICE_SPEC, id));
+
+  ipcMain.handle('sales:delete', (e, id, userId) => docDelete.hardDelete(getDb(), INVOICE_SPEC, id, userId));
 };

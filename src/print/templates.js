@@ -62,6 +62,8 @@ function docShell(title, body, pageSize, withSig = true, settings = {}) {
     tr { page-break-inside: avoid; }
     thead { display: table-header-group; }
     .totals td { font-weight: bold; background: #e0e7ff !important; }
+    /* جدول التسوية في سند استلام الإنتاج: خانتا التسمية بارزتان */
+    .sum td:nth-child(1), .sum td:nth-child(3) { background: #eef2ff; font-weight: 600; width: 22%; }
     .notes { margin-top: 10px; font-size: 12px; color: #334155; }
     .sig { display: flex; justify-content: space-between; margin-top: 34px; font-size: 12px; color: #1e3a8a; }
     .sig span { border-top: 2px solid #1e3a8a; padding: 4px 18px 0; }
@@ -114,17 +116,41 @@ function issueTemplate(doc, settings) {
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
-function receiveTemplate(doc, settings) {
-  // كسور مطابقة للشاشة: السطر المستلم بوحدة الكيس يُظهر الحبات المفردة، وغيره «—»
-  const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
-    fmt(r.quantity, 3), Number(r.breaks) > 0 ? num(r.breaks) : '—', esc(r.unit), bucketCell(r.bucket), num(r.pieces), fmt(r.weight_kg, 2)]);
-  const bags = (doc.items || []).reduce((s, r) => s + (Number(r.bags_used) || 0), 0);
+// سند استلام الإنتاج الموحّد (v2): نتيجة كل كرتون + تسوية الفارق + توزيع الأثر في صفحة واحدة
+function productionReceiptTemplate(doc, settings) {
+  const lines = doc.cartons || [];
+  const unit = doc.unit_name || 'حبة';
+  const rows = lines.map((r, i) => {
+    const accounted = (Number(r.good_pieces) || 0) + (Number(r.defect_before_pieces) || 0) + (Number(r.defect_after_pieces) || 0);
+    const diff = (Number(r.carton_pieces) || 0) - accounted;
+    return [i + 1, esc(r.carton_number), `${esc(r.raw_code || '')} ${esc(r.raw_name || '')}`,
+      num(r.carton_pieces), num(r.good_pieces), num(r.defect_before_pieces), num(r.defect_after_pieces),
+      num(accounted), diff === 0 ? '—' : num(diff)];
+  });
+  const issued = Number(doc.issued_pieces) || 0;
+  const total = Number(doc.total_pieces) || 0;
+  const variance = Number(doc.variance_pieces) || 0;
+  const surplus = Number(doc.surplus_pieces) || 0;
+  const fgGood = (Number(doc.good_pieces) || 0) + surplus;
   const issueInfo = doc.issue_number ? `<b>تصريح الصرف:</b> ${esc(doc.issue_number)} &nbsp;` : '';
-  return docShell([settings.factory_name || 'سام بلاستيك', 'تصريح استلام إنتاج تام'],
-    meta(doc, `${doc.machine_name ? `<b>المكينة:</b> ${esc(doc.machine_name)} &nbsp;` : ''}${doc.shift_name ? `<b>الوردية:</b> ${esc(doc.shift_name)} &nbsp;` : ''}${issueInfo}`)
-    + tableHtml(['#', 'الصنف', 'المخزن', 'الكمية', 'كسور', 'الوحدة', 'السلة', 'الحبات', 'الوزن كجم'], rows)
-    + (bags > 0 ? `<div class="notes">الأكياس المستهلكة للتعبئة: <b>${num(bags)}</b> كيس</div>` : '')
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
+  const src = doc.source === 'customer'
+    ? `<b>المصدر:</b> خام العميل${doc.party_name ? ` — ${esc(doc.party_name)}` : ''} (عهدة)`
+    : '<b>المصدر:</b> خام المصنع';
+  const summaryNote = variance > 0 ? 'عجز تسوية' : variance < 0 ? 'فائض تسوية' : 'تسوية مطابقة';
+  return docShell([settings.factory_name || 'سام بلاستيك', 'سند استلام إنتاج'],
+    meta(doc, `${doc.machine_name ? `<b>المكينة:</b> ${esc(doc.machine_name)} &nbsp;` : ''}${doc.shift_name ? `<b>الوردية:</b> ${esc(doc.shift_name)} &nbsp;` : ''}${doc.receiver_name ? `<b>المستلم:</b> ${esc(doc.receiver_name)} &nbsp;` : ''}${issueInfo}<br>${src} &nbsp; <b>الصنف النهائي:</b> ${esc(doc.fg_code || '')} — ${esc(doc.fg_name || '')}${doc.warehouse_name ? ` &nbsp; <b>المخزن:</b> ${esc(doc.warehouse_name)}` : ''}`)
+    + tableHtml(['#', 'الكرتون', 'الخام', 'حبات الكرتون', 'سليم', 'تالف قبل', 'تالف بعد', 'المحسوب', 'الفارق'], rows)
+    + `<table class="sum">
+      <tr><td>المصروف (حبات الكراتين)</td><td><b>${num(issued)} ${esc(unit)}</b></td>
+          <td>إجمالي المنتج</td><td><b>${num(total)} ${esc(unit)}</b></td></tr>
+      <tr><td>الفارق</td><td><b>${variance > 0 ? `عجز ${num(variance)}` : variance < 0 ? `فائض ${num(-variance)}` : 'صفر'}</b></td>
+          <td>يُضاف للتام السليم</td><td><b>${num(surplus)}</b></td></tr>
+      <tr><td>تام سليم</td><td><b>${num(fgGood)}</b></td>
+          <td>تام تالف (بعد النفخ)</td><td><b>${num(doc.defect_after_pieces)}</b></td></tr>
+      <tr><td>خام تالف (قبل النفخ)</td><td><b>${num(doc.defect_before_pieces)}</b></td>
+          <td>الأكياس المستهلكة</td><td><b>${num(doc.bags_used)}</b></td></tr>
+    </table>`
+    + `<div class="notes">الحالة: <b>${summaryNote}</b>${doc.notes ? ` — ملاحظات: ${esc(doc.notes)}` : ''}</div>`, settings.doc_page_size, true, settings);
 }
 
 function invoiceTemplate(doc, settings) {
@@ -183,22 +209,6 @@ function transferTemplate(doc, settings) {
     + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
 }
 
-function productionTemplate(doc, settings) {
-  const total = (doc.good_pieces || 0) + (doc.defect_before || 0) + (doc.defect_after || 0);
-  const rest = (doc.pieces || 0) - total;
-  const rows = [
-    [num(doc.pieces || 0), num(doc.good_pieces || 0), num(doc.defect_before || 0), num(doc.defect_after || 0),
-      rest > 0 ? num(rest) : '—'],
-  ];
-  return docShell([settings.factory_name || 'سام بلاستيك', 'نتيجة إنتاج كرتون'],
-    `<div class="meta">
-      <b>الكرتون:</b> ${esc(doc.carton_number)} &nbsp; <b>التاريخ:</b> ${esc(doc.result_date)}
-      ${doc.item_code ? ` &nbsp; <b>الصنف:</b> ${esc(doc.item_code)} — ${esc(doc.item_name)}` : ''}
-      ${doc.issue_number ? `<br><b>تصريح الصرف:</b> ${esc(doc.issue_number)}` : ''}</div>`
-    + tableHtml(['حبات الكرتون', 'سليم', 'تالف قبل النفخ', 'تالف بعد النفخ', 'غير محسوب'], rows)
-    + `<div class="notes">ملاحظات: ${esc(doc.notes || '')}</div>`, settings.doc_page_size, true, settings);
-}
-
 function returnTemplate(doc, settings) {
   const isSale = doc.type !== 'purchase';
   const rows = (doc.items || []).map((r, i) => [i + 1, `${esc(r.code)} ${esc(r.name)}`, esc(r.warehouse_name),
@@ -252,7 +262,8 @@ function guideTemplate(settings, bodyHtml) {
 }
 
 module.exports = {
-  purchaseTemplate, issueTemplate, receiveTemplate, invoiceTemplate, exitTemplate,
-  tollReceiptTemplate, tollDeliveryTemplate, scrapTemplate, transferTemplate, productionTemplate,
+  purchaseTemplate, issueTemplate, invoiceTemplate, exitTemplate,
+  tollReceiptTemplate, tollDeliveryTemplate, scrapTemplate, transferTemplate,
+  productionReceiptTemplate,
   paymentTemplate, returnTemplate, reportTemplate, guideTemplate,
 };

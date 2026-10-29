@@ -1,26 +1,30 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc, itemComboIn } from '../ui.js';
+import {
+  toast, implicationsDialog, renderTable, attachRowMenu, rowActions, openModal, esc,
+  itemComboIn, canWrite,
+} from '../ui.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
 const DISP_LABEL = { to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد', sold_scrap: 'بيع خردة', production_defect: 'تالف إنتاج بخام عميل' };
 const DISP_TAG = { to_recycled: 'muharraz', to_stock: 'salem', to_supplier: 'new', sold_scrap: 'talef', production_defect: 'talef' };
-// سند آلي من نتيجة إنتاج: يُعرض ويُصنَّف، لكنه ليس خياراً يدوياً في النموذج
+// سند آلي من استلام إنتاج: يُعرض ويُطبَّع، لكنه لا يُعدَّل ولا يُحذف يدوياً — يُدار من الاستلام نفسه
 const AUTO_DISP = ['production_defect'];
 
 register('scrap', {
   title: 'التالف ومصيره',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const rows = await api.invoke('scrap:list');
       el.innerHTML = `
-        <div class="toolbar"><button class="btn primary" id="btn-add">+ تسجيل تالف</button></div>
+        <div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ تسجيل تالف</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
         <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
-      el.querySelector('#btn-add').onclick = () => form(null);
-      const active = rows.filter(r => r.status !== 'void');
+      if (writable) el.querySelector('#btn-add').onclick = () => form(null);
       el.querySelector('#summary').innerHTML =
-        `عدد السندات: <b>${rows.length}</b> — النشطة: <b>${active.length}</b> — إجمالي حبات النشطة: <b>${fmtNum(active.reduce((a, r) => a + (Number(r.pieces) || 0), 0), 0)}</b>`;
+        `عدد السندات: <b>${rows.length}</b> — إجمالي الحبات: <b>${fmtNum(rows.reduce((a, r) => a + (Number(r.pieces) || 0), 0), 0)}</b>`
+        + ` — سندات آلية من استلام الإنتاج: <b>${rows.filter(r => r.prod_receipt_id).length}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
@@ -30,16 +34,22 @@ register('scrap', {
         { key: 'party_name', label: 'الطرف', render: r => r.party_name || '—' },
         { key: 'pieces', label: 'الحبات', render: r => fmtNum(r.pieces, 0) },
         { key: 'weight_kg', label: 'الوزن كجم', render: r => fmtNum(r.weight_kg) },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
+        { key: 'prod_receipt_id', label: 'مصدر السند', render: r => r.prod_receipt_id ? '<span class="tag muharraz">آلي من استلام إنتاج</span>' : '<span class="tag salem">يدوي</span>' },
       ], rows);
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = rows[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r.id) },
-          { label: 'طباعة', onClick: () => printDoc(r.id) },
-          { label: 'تعديل', onClick: () => edit(r.id) },
-          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
-        ];
+        const autoDoc = !!r.prod_receipt_id;
+        return rowActions({
+          id: r.id,
+          entity: 'scrap',
+          valueKind: 'pieces',
+          label: 'سند التالف',
+          view: (id) => view(id),
+          print: (id) => printDoc(id),
+          edit: autoDoc ? null : (id) => edit(id),
+          readOnly: !writable || autoDoc,
+          reload: load,
+        });
       });
     }
 
@@ -61,6 +71,7 @@ register('scrap', {
             ${doc.price != null ? `&nbsp; <b>السعر:</b> ${fmtMoney(doc.price)}` : ''}<br>
             ${doc.is_customer ? '<span class="tag new">تالف خام عميل — يُخصم من رصيده</span>' :
               `<span class="muted">الخصم: <b>${fmtNum(doc.talef_take, 0)}</b> من التالفة — <b>${fmtNum(doc.salem_take, 0)}</b> من السليمة</span>`}</p>
+          ${doc.prod_receipt_id ? `<div class="guide-tip">سند آلي أنشأه استلام الإنتاج؛ لا يُعدَّل ولا يُحذف من هنا — عدّل سند الاستلام نفسه فيعود رصيد العميل تلقائياً.</div>` : ''}
           ${doc.notes ? `<p><b>ملاحظات:</b> ${esc(doc.notes)}</p>` : ''}`,
           [{ label: 'طباعة', onClick: async (b) => { try { b.disabled = true; await api.invoke('print:open', { kind: 'scrap', doc, settings: await api.invoke('settings:get') }); } catch (e) { toast(String(e.message || e), 'err'); } b.disabled = false; } },
             { label: 'إغلاق', onClick: (b) => b.remove() }]);
@@ -74,18 +85,6 @@ register('scrap', {
           'ستُعكس حركة المخزون وأثر السلات الحالي ويُعاد تطبيق السند بالقيم الجديدة.',
         ]))) return;
         form(doc);
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('scrap:get', id);
-        if (!(await implicationsDialog('إلغاء سند تالف', [
-          `سيُلغى أثر السند ${esc(doc.doc_number)} على المخزون والسلات (ورصيد العميل إن وُجد).`,
-        ]))) return;
-        await api.invoke('scrap:void', id, currentUser().id);
-        toast('تم إلغاء السند', 'ok');
-        await load();
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 

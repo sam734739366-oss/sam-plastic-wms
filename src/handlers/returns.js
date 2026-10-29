@@ -1,13 +1,36 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance, applyBucketsDelta } = require('../stock');
+const { writeMoves, getBalance, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const docDelete = require('../docDelete');
 const ledger = require('../ledger');
 
 // مرتجعات البيع: البضاعة تعود للمخزون + تخفيض ذمة العميل (أو استرداد نقد)
 // مرتجعات الشراء: البضاعة تخرج من المخزون + تخفيض ذمة المورد (أو قبض نقد)
 const TYPE_BUCKET = { sale: 'salem', scrap: 'talef' };
+
+// كل مرتجع يشير إلى فاتورته الأصلية، لكن لا مستند يتفرع إلى المرتجع نفسه:
+// حذفه يردّ أثره على السلات والدفتر ويمحى هو وبنوده.
+const SALE_RETURN_SPEC = {
+  table: 'sales_returns',
+  docType: 'sale_return',
+  ledgerType: 'sale_return',
+  auditEntity: 'sale_return',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(total_price),0) t FROM sales_return_items WHERE return_id=?').get(id).t,
+  deps: [],
+};
+
+const PURCHASE_RETURN_SPEC = {
+  table: 'purchase_returns',
+  docType: 'purchase_return',
+  ledgerType: 'purchase_return',
+  auditEntity: 'purchase_return',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(total_price),0) t FROM purchase_return_items WHERE return_id=?').get(id).t,
+  deps: [],
+};
+
+const specOf = (isSale) => (isSale ? SALE_RETURN_SPEC : PURCHASE_RETURN_SPEC);
 
 function saleBucketOf(db, invoiceId) {
   const inv = db.prepare('SELECT invoice_type FROM invoices WHERE id=?').get(invoiceId);
@@ -27,7 +50,7 @@ function maxReturnable(db, table, refCol, refId, itemId, excludeId = null) {
   const ret = db.prepare(`SELECT COALESCE(SUM(ri.pieces),0) p
     FROM ${table === 'invoice_items' ? 'sales_return_items' : 'purchase_return_items'} ri
     JOIN ${table === 'invoice_items' ? 'sales_returns' : 'purchase_returns'} r ON r.id = ri.return_id
-    WHERE r.${refCol}=? AND r.status='active' AND ri.item_id=? ${excludeId != null ? 'AND r.id != ?' : ''}`)
+    WHERE r.${refCol}=? AND ri.item_id=? ${excludeId != null ? 'AND r.id != ?' : ''}`)
     .get(refId, itemId, ...(excludeId != null ? [excludeId] : [])).p;
   return orig - ret;
 }
@@ -94,7 +117,7 @@ module.exports = function register(ipcMain) {
     for (const it of items) {
       const ret = db.prepare(`SELECT COALESCE(SUM(ri.pieces),0) p
         FROM ${retTable} ri JOIN ${retHead} r ON r.id = ri.return_id
-        WHERE r.${retCol}=? AND r.status='active' AND ri.item_id=? ${excludeId != null ? 'AND r.id != ?' : ''}`)
+        WHERE r.${retCol}=? AND ri.item_id=? ${excludeId != null ? 'AND r.id != ?' : ''}`)
         .get(refId, it.item_id, ...(excludeId != null ? [excludeId] : [])).p;
       it.remain = Math.max(0, (Number(it.pieces) || 0) - ret);
     }
@@ -116,9 +139,9 @@ module.exports = function register(ipcMain) {
     const refCol = isSale ? 'invoice_id' : 'purchase_id';
     if (!checkDocNumber(db, table, number, doc.id)) throw new Error('رقم المرتجع مكرر');
 
-    const source = db.prepare(`SELECT * FROM ${refTable} WHERE id=? AND status='active'`)
+    const source = db.prepare(`SELECT * FROM ${refTable} WHERE id=?`)
       .get(isSale ? doc.invoice_id : doc.purchase_id);
-    if (!source) throw new Error(isSale ? 'فاتورة البيع غير موجودة أو ملغاة' : 'فاتورة الشراء غير موجودة أو ملغاة');
+    if (!source) throw new Error(isSale ? 'فاتورة البيع غير موجودة — ربما حُذفت' : 'فاتورة الشراء غير موجودة — ربما حُذفت');
     // الطرف يُرث من الفاتورة الأصلية إن لم يُحدد
     const partyId = doc.party_id != null ? doc.party_id : source.party_id;
 
@@ -130,11 +153,11 @@ module.exports = function register(ipcMain) {
       if (id) {
         oldItems = db.prepare(`SELECT * FROM ${itemsTable} WHERE return_id=?`).all(id);
         db.prepare(`DELETE FROM ${itemsTable} WHERE return_id=?`).run(id);
-        // عكس الأثر القديم كاملاً قبل تطبيق الجديد (كل بند يحمل سلة خاصة)
-        voidDoc(db, isSale ? 'sale_return' : 'purchase_return', id, userId);
-        // مرتجع البيع كان +سلة فالعكس خصم، ومرتجع الشراء كان −سليم فالعكس إضافة
+        // عكس أثر السلات القديم كاملاً قبل تطبيق الجديد (كل بند يحمل سلة خاصة).
+        // حركات المخزون يعكسها writeMoves نفسه بإدراج صفوف عكسها، فلا حاجة لعكسها هنا.
+        // مرتجع البيع كان +سلة فالعكس خصم، ومرتجع الشراء كان −سلة فالعكس إضافة
         applyBucketsDelta(db, oldItems, isSale ? -1 : 1);
-        ledger.voidDoc(db, isSale ? 'sale_return' : 'purchase_return', id);
+        ledger.deleteDoc(db, isSale ? 'sale_return' : 'purchase_return', id);
         db.prepare(`UPDATE ${table} SET doc_number=?, doc_date=?, ${refCol}=?, party_id=?, payment_method=?, notes=? WHERE id=?`)
           .run(number, doc.doc_date, isSale ? doc.invoice_id : doc.purchase_id,
             partyId || null, paymentMethod, doc.notes || null, id);
@@ -196,22 +219,29 @@ module.exports = function register(ipcMain) {
     return { id };
   });
 
-  ipcMain.handle('returns:void', (e, doc, userId) => {
+  // مرتجع البيع والشراء كيانان خلف قناة واحدة، فتُقرأ الهوية من payload:
+  // { type, id } كما في returns:save، أو رقم يُبحث عنه في مرتجعات البيع ثم مرتجعات الشراء.
+  function resolveReturn(payload) {
+    if (payload && typeof payload === 'object') {
+      const id = Number(payload.id);
+      if (payload.type === 'sale') return [true, id];
+      if (payload.type === 'purchase') return [false, id];
+      throw new Error('نوع المرتجع غير صالح');
+    }
+    const id = Number(payload);
     const db = getDb();
-    if (!['sale', 'purchase'].includes(doc.type)) throw new Error('نوع المرتجع غير صالح');
-    const isSale = doc.type === 'sale';
-    const table = isSale ? 'sales_returns' : 'purchase_returns';
-    const itemsTable = isSale ? 'sales_return_items' : 'purchase_return_items';
-    const before = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(doc.id);
-    if (!before) throw new Error('المرتجع غير موجود');
-    const oldItems = db.prepare(`SELECT * FROM ${itemsTable} WHERE return_id=?`).all(doc.id);
-    withTransaction(db, () => {
-      voidDoc(db, isSale ? 'sale_return' : 'purchase_return', doc.id, userId);
-      applyBucketsDelta(db, oldItems, isSale ? -1 : 1);
-      ledger.voidDoc(db, isSale ? 'sale_return' : 'purchase_return', doc.id);
-      db.prepare(`UPDATE ${table} SET status='void' WHERE id=?`).run(doc.id);
-    });
-    audit(db, userId, 'void', isSale ? 'sale_return' : 'purchase_return', doc.id, before, null);
-    return { ok: true };
+    if (db.prepare('SELECT id FROM sales_returns WHERE id=?').get(id)) return [true, id];
+    if (db.prepare('SELECT id FROM purchase_returns WHERE id=?').get(id)) return [false, id];
+    throw new Error('المرتجع غير موجود');
+  }
+
+  ipcMain.handle('returns:impact', (e, payload) => {
+    const [isSale, id] = resolveReturn(payload);
+    return docDelete.impact(getDb(), specOf(isSale), id);
+  });
+
+  ipcMain.handle('returns:delete', (e, payload, userId) => {
+    const [isSale, id] = resolveReturn(payload);
+    return docDelete.hardDelete(getDb(), specOf(isSale), id, userId);
   });
 };

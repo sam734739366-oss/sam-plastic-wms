@@ -2,6 +2,7 @@ const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
 const { suggestNumber, checkDocNumber, nextCartonNumbers } = require('../docs');
+const docDelete = require('../docDelete');
 const ledger = require('../ledger');
 
 // بادئة ترقيم كراتين خام العميل — تميّزها عن كراتين مشتريات المصنع في الجدول نفسه
@@ -24,20 +25,48 @@ function planCartons(item, pieces) {
   return out;
 }
 
+// كراتين السند لم تعد حرة: صار لها تصريح صرف (issued) أو أُنتجت (finished)،
+// فالتعديل يعيد توليد الكراتين من الصفر ويكسر سلسلة الإنتاج القائمة عليها.
 function assertCartonsEditable(db, receiptId) {
   const issued = db.prepare(`SELECT COUNT(*) c FROM cartons WHERE receipt_id=? AND status != 'in_stock'`).get(receiptId).c;
-  if (issued > 0) throw new Error('لا يمكن تعديل السند — توجد كراتين مصروفة للإنتاج، ألغِ تصريح الصرف أولاً');
+  if (issued > 0) throw new Error('لا يمكن تعديل السند — توجد كراتين صُرفت للإنتاج، احذف تصريح الصرف الذي صرفها أولاً');
 }
 
+// رصيد العميل = خام مستلم − مُسلَّم − تالف/مُخصوم، على الصفوف الموجودة كلها:
+// لا حالة «ملغى» في v2، فالمحذوف يُمحى أثره معه في اللحظة نفسها.
 function customerBalance(db, partyId) {
   return db.prepare(`SELECT
     COALESCE((SELECT SUM(i.pieces) FROM customer_raw_items i JOIN customer_raw_receipts r ON r.id=i.receipt_id
-      WHERE r.party_id=p.id AND r.status='active'),0) raw_in,
+      WHERE r.party_id=p.id),0) raw_in,
     COALESCE((SELECT SUM(di.pieces) FROM customer_delivery_items di JOIN customer_deliveries d ON d.id=di.delivery_id
-      WHERE d.party_id=p.id AND d.status='active'),0) delivered_out,
-    COALESCE((SELECT SUM(s.pieces) FROM scrap_movements s WHERE s.party_id=p.id AND s.status='active'),0) scrap_out
+      WHERE d.party_id=p.id),0) delivered_out,
+    COALESCE((SELECT SUM(s.pieces) FROM scrap_movements s WHERE s.party_id=p.id),0) scrap_out
     FROM parties p WHERE p.id=?`).get(partyId);
 }
+
+// سند استلام خام العميل لا يُنتج حركة مخزون ولا قيد دفتر: أثره كله في رصيد العميل
+// وفي كراتينه (C-). حذفه يمحى الكراتين ما دام لم يصرف منها شيء.
+const TOLLING_RECEIPT_SPEC = {
+  table: 'customer_raw_receipts',
+  moveTypes: [],
+  auditEntity: 'tolling_receipt',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(pieces),0) t FROM customer_raw_items WHERE receipt_id=?').get(id).t,
+  deps: [
+    (db, id) => db.prepare(`SELECT carton_number FROM cartons WHERE receipt_id=? AND status != 'in_stock'`)
+      .all(id).map((r) => ({ label: 'كرتون خام مُصروف للإنتاج', number: r.carton_number })),
+  ],
+  beforeDelete: (db, id) => { db.prepare('DELETE FROM cartons WHERE receipt_id=?').run(id); },
+};
+
+// سند التسليم يخصم من رصيد العميل بصف نفسه (بلا حركة مخزون). فاتورة الأجرة المرتبطة
+// به تبقى وتُعرض وحدها: حذف التسليم لا يمسّ الذمة، وحذف الفاتورة هو ما يمنع وجود التسليم.
+const TOLLING_DELIVERY_SPEC = {
+  table: 'customer_deliveries',
+  moveTypes: [],
+  auditEntity: 'tolling_delivery',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(pieces),0) t FROM customer_delivery_items WHERE delivery_id=?').get(id).t,
+  deps: [],
+};
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('tolling:suggestReceipt', () => suggestNumber(getDb(), 'customer_raw_receipts'));
@@ -125,34 +154,24 @@ module.exports = function register(ipcMain) {
         cartonPlan.forEach((c, i) => insCarton.run(nums[i], c.item_id, c.pieces, doc.party_id, id));
       }
     });
-    audit(db, userId, isNew ? 'create' : 'update', 'customer_raw_receipt', id, before, doc);
+    audit(db, userId, isNew ? 'create' : 'update', 'tolling_receipt', id, before, doc);
     return { id };
   });
 
-  ipcMain.handle('tolling:receiptVoid', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM customer_raw_receipts WHERE id=?').get(id);
-    if (!before) throw new Error('سند الاستلام غير موجود');
-    assertCartonsEditable(db, id);
-    withTransaction(db, () => {
-      // كراتين لم تُصرف بعد: تُحذف كي لا تظهر كمتاحة للصرف على سند ملغى
-      db.prepare('DELETE FROM cartons WHERE receipt_id=?').run(id);
-      db.prepare(`UPDATE customer_raw_receipts SET status='void' WHERE id=?`).run(id);
-    });
-    audit(db, userId, 'void', 'customer_raw_receipt', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('tolling:receiptImpact', (e, id) => docDelete.impact(getDb(), TOLLING_RECEIPT_SPEC, id));
+
+  ipcMain.handle('tolling:receiptDelete', (e, id, userId) => docDelete.hardDelete(getDb(), TOLLING_RECEIPT_SPEC, id, userId));
 
   ipcMain.handle('tolling:balance', () => {
     const db = getDb();
     return db.prepare(`SELECT p.id, p.name,
       COALESCE((SELECT SUM(i.pieces) FROM customer_raw_items i JOIN customer_raw_receipts r ON r.id=i.receipt_id
-        WHERE r.party_id=p.id AND r.status='active'),0) raw_in,
+        WHERE r.party_id=p.id),0) raw_in,
       COALESCE((SELECT SUM(i.weight_kg) FROM customer_raw_items i JOIN customer_raw_receipts r ON r.id=i.receipt_id
-        WHERE r.party_id=p.id AND r.status='active'),0) raw_kg,
+        WHERE r.party_id=p.id),0) raw_kg,
       COALESCE((SELECT SUM(di.pieces) FROM customer_delivery_items di JOIN customer_deliveries d ON d.id=di.delivery_id
-        WHERE d.party_id=p.id AND d.status='active'),0) delivered_out,
-      COALESCE((SELECT SUM(s.pieces) FROM scrap_movements s WHERE s.party_id=p.id AND s.status='active'),0) scrap_out
+        WHERE d.party_id=p.id),0) delivered_out,
+      COALESCE((SELECT SUM(s.pieces) FROM scrap_movements s WHERE s.party_id=p.id),0) scrap_out
       FROM parties p WHERE p.type IN ('customer','both') ORDER BY p.name`).all()
       .map(r => ({ ...r, remaining: r.raw_in - r.delivered_out - r.scrap_out }));
   });
@@ -250,20 +269,11 @@ module.exports = function register(ipcMain) {
         (delivery_id, item_id, quantity, unit, pieces, weight_kg, notes) VALUES (?,?,?,?,?,?,?)`);
       for (const r of rows) insItem.run(id, r.item_id, r.quantity, r.unit, r.pieces, r.weight_kg, r.notes);
     });
-    audit(db, userId, isNew ? 'create' : 'update', 'customer_delivery', id, before, doc);
+    audit(db, userId, isNew ? 'create' : 'update', 'tolling_delivery', id, before, doc);
     return { id };
   });
 
-  ipcMain.handle('tolling:deliveryVoid', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM customer_deliveries WHERE id=?').get(id);
-    if (!before) throw new Error('سند التسليم غير موجود');
-    if (before.invoice_id) {
-      const inv = db.prepare(`SELECT status FROM invoices WHERE id=?`).get(before.invoice_id);
-      if (inv && inv.status === 'active') throw new Error('لا يمكن إلغاء التسليم — فاتورة الأجرة المرتبطة نشطة، ألغِ الفاتورة أولاً');
-    }
-    db.prepare(`UPDATE customer_deliveries SET status='void' WHERE id=?`).run(id);
-    audit(db, userId, 'void', 'customer_delivery', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('tolling:deliveryImpact', (e, id) => docDelete.impact(getDb(), TOLLING_DELIVERY_SPEC, id));
+
+  ipcMain.handle('tolling:deliveryDelete', (e, id, userId) => docDelete.hardDelete(getDb(), TOLLING_DELIVERY_SPEC, id, userId));
 };

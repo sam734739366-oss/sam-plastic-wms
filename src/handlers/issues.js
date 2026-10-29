@@ -1,8 +1,28 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance, applyBucketsDelta } = require('../stock');
+const { writeMoves, getBalance, applyBucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const docDelete = require('../docDelete');
+
+// تصريح الصرف هو مصدر كراتين الإنتاج: لا يُحذف إلا بعد حذف استلام الإنتاج المرتبط به،
+// وعند الحذف تعود كراتينه إلى المخزن ويُردّ ما خُصم من سلات أصنافها.
+const ISSUE_SPEC = {
+  table: 'issue_permits',
+  auditEntity: 'issue_permit',
+  docType: 'issue',
+  value: (db, id) => db.prepare('SELECT COALESCE(SUM(pieces),0) t FROM issue_items WHERE issue_permit_id=?').get(id).t,
+  deps: [
+    (db, id) => db.prepare('SELECT doc_number FROM production_receipts WHERE issue_permit_id=?')
+      .all(id).map((r) => ({ label: 'استلام إنتاج', number: r.doc_number })),
+    (db, id) => db.prepare(`SELECT c.carton_number FROM cartons c
+      JOIN production_receipt_cartons rc ON rc.carton_id = c.id
+      WHERE c.issue_permit_id=?`).all(id).map((r) => ({ label: 'كرتون أُنتج فعلاً', number: r.carton_number })),
+  ],
+  beforeDelete: (db, id) => {
+    db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);
+  },
+};
 
 module.exports = function register(ipcMain) {
   ipcMain.handle('issues:suggest', () => suggestNumber(getDb(), 'issue_permits'));
@@ -11,12 +31,29 @@ module.exports = function register(ipcMain) {
     const db = getDb();
     return db.prepare(`SELECT p.*, m.name machine_name, s.name shift_name, pa.name party_name,
       (SELECT COUNT(*) FROM issue_items WHERE issue_permit_id=p.id) items_count,
-      (SELECT COALESCE(SUM(pieces),0) FROM issue_items WHERE issue_permit_id=p.id) total_pieces
+      (SELECT COALESCE(SUM(pieces),0) FROM issue_items WHERE issue_permit_id=p.id) total_pieces,
+      (SELECT COUNT(*) FROM production_receipts pr WHERE pr.issue_permit_id=p.id) receipts_count
       FROM issue_permits p
       LEFT JOIN machines m ON m.id=p.machine_id
       LEFT JOIN shifts s ON s.id=p.shift_id
       LEFT JOIN parties pa ON pa.id=p.party_id
       ORDER BY p.id DESC`).all();
+  });
+
+  // قوائم الانتظار: تصريحات مصروفة لم يُستلم إنتاجها بعد (هي ما تفتحه شاشة استلام الإنتاج)
+  ipcMain.handle('issues:openForReceipt', () => {
+    const db = getDb();
+    return db.prepare(`SELECT p.id, p.doc_number, p.doc_date, p.source, p.party_id,
+        m.name machine_name, s.name shift_name, pa.name party_name,
+        (SELECT COALESCE(SUM(pieces),0) FROM issue_items WHERE issue_permit_id=p.id) issued_pieces,
+        (SELECT COUNT(*) FROM cartons c WHERE c.issue_permit_id=p.id) cartons_count,
+        (SELECT COUNT(*) FROM cartons c WHERE c.issue_permit_id=p.id AND c.status='issued') pending_cartons
+      FROM issue_permits p
+      LEFT JOIN machines m ON m.id=p.machine_id
+      LEFT JOIN shifts s ON s.id=p.shift_id
+      LEFT JOIN parties pa ON pa.id=p.party_id
+      WHERE EXISTS (SELECT 1 FROM cartons c WHERE c.issue_permit_id=p.id AND c.status='issued')
+      ORDER BY p.doc_date, p.id`).all();
   });
 
   ipcMain.handle('issues:get', (e, id) => {
@@ -34,7 +71,9 @@ module.exports = function register(ipcMain) {
     for (const it of doc.items) {
       it.carton_ids = it.carton_ids ? JSON.parse(it.carton_ids) : [];
     }
-    doc.cartons = db.prepare(`SELECT c.* FROM cartons c WHERE c.issue_permit_id=? ORDER BY c.carton_number`).all(id);
+    doc.cartons = db.prepare(`SELECT c.*, i.code item_code, i.name item_name, i.unit_name
+      FROM cartons c JOIN items i ON i.id=c.item_id
+      WHERE c.issue_permit_id=? ORDER BY c.carton_number`).all(id);
     return doc;
   });
 
@@ -71,12 +110,8 @@ module.exports = function register(ipcMain) {
     withTransaction(db, () => {
       let oldItems = [];
       if (id) {
-        const hasResults = db.prepare(`SELECT COUNT(*) c FROM production_results pr
-          JOIN cartons c ON c.id=pr.carton_id WHERE c.issue_permit_id=?`).get(id).c;
-        if (hasResults > 0) throw new Error('لا يمكن تعديل التصريح — توجد نتائج إنتاج مسجلة على كراتينه');
-        const linkedRecv = db.prepare(`SELECT COUNT(*) c FROM receive_permits
-          WHERE issue_permit_id=? AND status='active'`).get(id).c;
-        if (linkedRecv > 0) throw new Error('لا يمكن تعديل التصريح — توجد تصاريح استلام مرتبطة به، ألغِها أولاً');
+        const deps = docDelete.collectDeps(db, ISSUE_SPEC, id);
+        if (deps.length) throw new Error(docDelete.depsMessage(deps));
         oldItems = db.prepare('SELECT * FROM issue_items WHERE issue_permit_id=?').all(id);
         db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);
         db.prepare('DELETE FROM issue_items WHERE issue_permit_id=?').run(id);
@@ -103,7 +138,6 @@ module.exports = function register(ipcMain) {
         let pieces = toPieces(it.quantity, it.unit, item);
         // عند اختيار كراتين فالعبرة بحباتها الفعلية لا بعددها × «حبات/كرتون»:
         // آخر كرتونة من خام العميل قد تكون ناقصة، فالحساب بالعدد يُبالغ في الكمية.
-        // كراتين المصنع كلها موحّدة القياس، فلا تتغيّر نتيجة الفاتورة القديمة.
         if (cartonIds.length) {
           const marks = cartonIds.map(() => '?').join(',');
           const found = db.prepare(`SELECT carton_number, pieces FROM cartons
@@ -146,24 +180,7 @@ module.exports = function register(ipcMain) {
     return { id };
   });
 
-  ipcMain.handle('issues:void', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM issue_permits WHERE id=?').get(id);
-    if (!before) throw new Error('التصريح غير موجود');
-    const hasResults = db.prepare(`SELECT COUNT(*) c FROM production_results pr
-      JOIN cartons c ON c.id=pr.carton_id WHERE c.issue_permit_id=?`).get(id).c;
-    if (hasResults > 0) throw new Error('لا يمكن إلغاء التصريح — توجد نتائج إنتاج مسجلة على كراتينه، احذفها أولاً');
-    const linkedRecv = db.prepare(`SELECT COUNT(*) c FROM receive_permits
-      WHERE issue_permit_id=? AND status='active'`).get(id).c;
-    if (linkedRecv > 0) throw new Error('لا يمكن إلغاء التصريح — توجد تصاريح استلام مرتبطة به، ألغِها أولاً');
-    const oldItems = db.prepare('SELECT * FROM issue_items WHERE issue_permit_id=?').all(id);
-    withTransaction(db, () => {
-      db.prepare(`UPDATE cartons SET status='in_stock', issue_date=NULL, issue_permit_id=NULL WHERE issue_permit_id=?`).run(id);
-      voidDoc(db, 'issue', id, userId);
-      if (before.source === 'own') applyBucketsDelta(db, oldItems, 1);
-      db.prepare(`UPDATE issue_permits SET status='void' WHERE id=?`).run(id);
-    });
-    audit(db, userId, 'void', 'issue_permit', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('issues:impact', (e, id) => docDelete.impact(getDb(), ISSUE_SPEC, id));
+
+  ipcMain.handle('issues:delete', (e, id, userId) => docDelete.hardDelete(getDb(), ISSUE_SPEC, id, userId));
 };

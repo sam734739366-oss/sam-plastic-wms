@@ -19,10 +19,11 @@ function makeDb() {
   return d;
 }
 
-function stubIpc() {
+function stubIpc(...files) {
   const handlers = {};
-  require('../src/handlers/purchases')({ handle: (ch, fn) => { handlers[ch] = fn; } });
-  require('../src/handlers/issues')({ handle: (ch, fn) => { handlers[ch] = fn; } });
+  for (const f of ['purchases', 'issues', ...files]) {
+    require(`../src/handlers/${f}`)({ handle: (ch, fn) => { handlers[ch] = fn; } });
+  }
   return handlers;
 }
 
@@ -117,7 +118,7 @@ test('issues:save customer source without a party is rejected', () => {
   }, 1), /اختر العميل/);
 });
 
-test('issues:void returns cartons to stock and reverses moves and salem', () => {
+test('issues:delete returns cartons to stock and erases moves and salem reversal', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
   buyCartons(h, 3, 'K-');
@@ -125,26 +126,51 @@ test('issues:void returns cartons to stock and reverses moves and salem', () => 
     doc_number: 'I-1', doc_date: '2026-10-18', source: 'own',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'كرتون', carton_ids: ['K-1', 'K-2'] }]
   }, 1);
-  h['issues:void'](null, id, 1);
+  const imp = h['issues:impact'](null, id);
+  assert.equal(imp.doc_number, 'I-1');
+  assert.equal(imp.value, 25600, 'القيمة المعروضة = حبات المصروفة');
+  assert.equal(imp.impact[0].text.includes('001'), true);
+  h['issues:delete'](null, id, 1);
   assert.equal(getBalance(db, 1, 1).balance_pieces, 38400);
   assert.equal(salem(db), 38400);
   const cartons = db.prepare("SELECT status FROM cartons WHERE carton_number IN ('K-1','K-2') ORDER BY carton_number").all();
   assert.deepEqual(cartons.map(c => c.status), ['in_stock', 'in_stock']);
-  assert.equal(db.prepare('SELECT status FROM issue_permits WHERE id=?').get(id).status, 'void');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM issue_permits WHERE id=?').get(id).c, 0, 'التصريح يُمحى لا يُلغى');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM issue_items WHERE issue_permit_id=?').get(id).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='issue' AND doc_id=?").get(id).c, 0);
+  // عكس الأثر مرّة واحدة: العدّاد يطابق صافي الحركات بعد الحذف
+  const net = db.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n
+    FROM stock_moves WHERE item_id=1 AND bucket='salem'`).get().n;
+  assert.equal(net, salem(db), 'items.qty_salem == Σ net(stock_moves)');
 });
 
-test('issues:void blocked when production results exist', () => {
+test('issues:delete ممنوع عند وجود سند استلام إنتاج — والرسالة تذكر رقمه', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc();
+  const h = stubIpc('production');
   buyCartons(h, 1, 'K-');
   const { id } = h['issues:save'](null, {
     doc_number: 'I-1', doc_date: '2026-10-18', source: 'own',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: ['K-1'] }]
   }, 1);
   const cartonId = db.prepare("SELECT id FROM cartons WHERE carton_number='K-1'").get().id;
-  db.prepare(`INSERT INTO production_results (carton_id, result_date, good_pieces) VALUES (?,?,?)`)
-    .run(cartonId, '2026-10-18', 100);
-  assert.throws(() => h['issues:void'](null, id, 1), /نتائج إنتاج/);
+  h['production:save'](null, {
+    doc_number: 'PR-1', doc_date: '2026-10-18', issue_permit_id: id,
+    fg_item_id: 1, warehouse_id: 1,
+    cartons: [{ carton_id: cartonId, good_pieces: 100, defect_before_pieces: 0, defect_after_pieces: 0 }],
+  }, 1);
+  const deps = h['issues:impact'](null, id).deps;
+  assert.deepEqual(deps.map((d) => [d.label, d.number]),
+    [['استلام إنتاج', 'PR-1'], ['كرتون أُنتج فعلاً', 'K-1']], 'سند الاستلام وكرتونه المانعان');
+  const err = (() => { try { h['issues:delete'](null, id, 1); return null; } catch (e) { return e; } })();
+  assert.ok(err && /PR-1/.test(err.message) && /احذف الأحدث/.test(err.message), err && err.message);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM issue_permits WHERE id=?').get(id).c, 1);
+  // حذف السند ثم التصريح: الأثر يردّ بالكامل
+  const receiptId = db.prepare('SELECT id FROM production_receipts').get().id;
+  h['production:delete'](null, receiptId, 1);
+  assert.equal(h['issues:impact'](null, id).deps.length, 0);
+  h['issues:delete'](null, id, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM cartons WHERE status='in_stock'").get().c, 1);
+  assert.equal(salem(db), 12800, 'الخام كله عاد إلى المخزن');
 });
 
 test('issues:cartonsAvailable lists only in_stock', () => {

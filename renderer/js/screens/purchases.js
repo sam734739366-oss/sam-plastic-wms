@@ -1,22 +1,29 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo, bucketOptions, bucketBadge} from '../ui.js';
+import {
+  toast, implicationsDialog, renderTable, attachRowMenu, rowActions, openModal, esc,
+  itemCombo, bucketOptions, bucketBadge, canWrite, unitOf,
+} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
 register('purchases', {
   title: 'فواتير الشراء',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const rows = await api.invoke('purchases:list');
       el.innerHTML = `
-        <div class="toolbar"><button class="btn primary" id="btn-add">+ فاتورة شراء</button></div>
+        <div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ فاتورة شراء</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
+        <div class="help-card" style="margin-bottom:12px">
+          <b>ملاحظة الحذف:</b> حذف الفاتورة نهائي — يُمحى أثرها على المخزون وعلى ذمة المورد أو النقدية، وتُمحى كراتينها المولّدة منها.
+          ولا يمكن حذف فاتورة خرجت كراتينها للإنتاج قبل حذف تصريح الصرف.
+        </div>
         <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
-      el.querySelector('#btn-add').onclick = () => form(null);
-      const active = rows.filter(r => r.status !== 'void');
+      if (writable) el.querySelector('#btn-add').onclick = () => form(null);
       el.querySelector('#summary').innerHTML =
-        `عدد الفواتير: <b>${rows.length}</b> — النشطة: <b>${active.length}</b> — إجمالي النشطة: <b>${fmtMoney(active.reduce((a, r) => a + (Number(r.total) || 0), 0))}</b>`;
+        `عدد الفواتير: <b>${rows.length}</b> — الإجمالي: <b>${fmtMoney(rows.reduce((a, r) => a + (Number(r.total) || 0), 0))}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
@@ -24,17 +31,18 @@ register('purchases', {
         { key: 'payment_method', label: 'الدفع', render: r => r.payment_method === 'cash' ? '<span class="tag muharraz">نقدي</span>' : '<span class="tag">آجل</span>' },
         { key: 'items_count', label: 'البنود' },
         { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغاة</span>' : '<span class="tag salem">نشطة</span>' },
       ], rows);
-      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
-        const r = rows[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r.id) },
-          { label: 'طباعة', onClick: () => printDoc(r.id) },
-          { label: 'تعديل', onClick: () => edit(r.id) },
-          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
-        ];
-      });
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => rowActions({
+        id: rows[ri].id,
+        entity: 'purchases',
+        valueKind: 'money',
+        label: 'فاتورة الشراء',
+        view: (id) => view(id),
+        print: (id) => printDoc(id),
+        edit: (id) => edit(id),
+        reload: load,
+        readOnly: !writable,
+      }));
     }
 
     async function printDoc(id) {
@@ -68,7 +76,7 @@ register('purchases', {
         const doc = await api.invoke('purchases:get', id);
         const issued = doc.cartons.filter(c => c.status !== 'in_stock');
         if (issued.length) {
-          toast('لا يمكن تعديل الفاتورة — كراتين صُرفت للإنتاج، ألغِ تصريح الصرف أولاً', 'err');
+          toast('لا يمكن تعديل الفاتورة — كراتين صُرفت للإنتاج، احذف تصريح الصرف أولاً', 'err');
           return;
         }
         if (doc.cartons.length) {
@@ -79,22 +87,6 @@ register('purchases', {
           if (!ok) return;
         }
         form(doc);
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('purchases:get', id);
-        if (doc.cartons.some(c => c.status !== 'in_stock')) {
-          toast('لا يمكن إلغاء الفاتورة — كراتين صُرفت للإنتاج، ألغِ تصريح الصرف أولاً', 'err');
-          return;
-        }
-        const lines = ['سيُلغى أثر الفاتورة على المخزون وأرصدة سليم نهائياً.', 'وسيُعكس أثرها المحاسبي: تُشطب ذمة المورد أو الدفع النقدي المسجل لها.'];
-        if (doc.cartons.length) lines.push(`ستُحذف الكراتين: ${doc.cartons.map(c => c.carton_number).join(' ، ')}`);
-        if (!(await implicationsDialog('إلغاء فاتورة شراء', lines))) return;
-        await api.invoke('purchases:void', id, currentUser().id);
-        toast('تم إلغاء الفاتورة', 'ok');
-        await load();
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
@@ -214,7 +206,7 @@ register('purchases', {
           const pieces = toPieces(qty.value, unitSel.value, item);
           const kg = piecesToWeightKg(pieces || 0, item?.weight_grams || 0);
           calc.textContent = pieces != null
-            ? `${fmtNum(pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`
+            ? `${fmtNum(pieces, 0)} ${unitOf(item)}${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`
             : '—';
           const p = parseFloat(price.value) || 0;
           const q = parseFloat(qty.value) || 0;

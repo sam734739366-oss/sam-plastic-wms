@@ -4,13 +4,13 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { setDb, migrate, repairOpenings } = require('../src/db');
+const { setDb, migrate } = require('../src/db');
+const { rebuildOpenings } = require('../src/cleanup');
 const ledger = require('../src/ledger');
 const { getBalance } = require('../src/stock');
 
 // دورة كاملة على قاعدة أساسية حتمية (ملف مؤقت يُبنى من المخطط ويُبذر ببيانات ثابتة):
-// إصلاح الأرصدة الافتتاحية ثم تنفيذ كل العمليات المخزنية والمحاسبية عبر المعالجات
-// الحقيقية مع فحص التطابق في كل مرحلة:
+// تنفيذ كل العمليات المخزنية والمحاسبية عبر المعالجات الحقيقية مع فحص التطابق في كل مرحلة:
 //   عداد الصنف (سليم/تالف/محرز) == صافي حركات المخزون للسلة نفسها.
 // القيم المتوقعة محسوبة من خط أساس يُقرأ من القاعدة نفسها (وليس أرقاماً ثابتة).
 
@@ -83,33 +83,51 @@ function assertConsistent(db, label) {
   }
 }
 
-test('إصلاح الأرصدة الافتتاحية: مصححة في الأساس ويعيد بناء أي تضخم قديم', () => {
+test('إعادة بناء الأرصدة الافتتاحية: الافتتاح = العدّاد − صافي العمليات بالموجب وبالسالب', () => {
   const { d, tmp } = fixtureDb();
   try {
     setDb(d);
-    // الأساس المبذور: الافتتاح = العداد − صافي العمليات (يُقرأ ديناميكياً)
     const row1 = d.prepare('SELECT * FROM items WHERE id=1').get();
-    const net1 = d.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n
-      FROM stock_moves WHERE doc_type != 'opening' AND item_id=1 AND bucket='salem'`).get().n;
-    const expected = (Number(row1.qty_salem) || 0) - net1;
-    const salem1 = d.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0) s FROM stock_moves
-      WHERE doc_type='opening' AND item_id=1 AND bucket='salem'`).get().s;
-    assert.equal(salem1, expected, `الافتتاح الحالي للصنف 001001 مصحح (${expected})`);
+    const netOf = (itemId, key) => d.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0)-COALESCE(SUM(qty_out_pieces),0) n
+      FROM stock_moves WHERE doc_type != 'opening' AND item_id=? AND bucket=?`).get(itemId, key).n;
+    const openIn = (itemId, key) => d.prepare(`SELECT COALESCE(SUM(qty_in_pieces),0) q FROM stock_moves
+      WHERE doc_type='opening' AND item_id=? AND bucket=?`).get(itemId, key).q;
+    const openOut = (itemId, key) => d.prepare(`SELECT COALESCE(SUM(qty_out_pieces),0) q FROM stock_moves
+      WHERE doc_type='opening' AND item_id=? AND bucket=?`).get(itemId, key).q;
+    // الأساس المبذور: الافتتاح = العداد − صافي العمليات (يُقرأ ديناميكياً)
+    const expected = (Number(row1.qty_salem) || 0) - netOf(1, 'salem');
+    assert.equal(netOf(1, 'salem'), 100, 'حركة الأساس غير الافتتاحية للصنف 001001');
+    assert.equal(openIn(1, 'salem'), expected, `الافتتاح الحالي للصنف 001001 مصحح (${expected})`);
     const w = d.prepare(`SELECT weight_in_kg w FROM stock_moves
       WHERE doc_type='opening' AND item_id=1 AND bucket='salem'`).get().w;
     assert.ok(Math.abs(w - expected * 20.5 / 1000) < 0.001, 'وزن الافتتاح محسوب من وزن الحبة');
     assertConsistent(d, 'الأساس المصحح');
-    // الإصلاح تكراراً لا يغيّر قاعدة سليمة
-    assert.equal(repairOpenings(d).changed.length, 0, 'الإصلاح لا يغيّر قاعدة سليمة');
-    // محاكاة خطأ الترحيل القديم (الافتتاح = العداد الكامل شاملاً العمليات) ثم الإصلاح يعيده
+    // إعادة البناء تكراراً على قاعدة متسقة لا تغيّر شيئاً
+    rebuildOpenings(d);
+    assert.equal(openIn(1, 'salem'), expected, 'إعادة البناء لا تُغير قاعدة متسقة');
+    assertConsistent(d, 'بعد إعادة بناء قاعدة متسقة');
+    // محاكاة افتتاح متضخم (الافتتاح = العدّاد الكامل شاملاً العمليات) ثم إعادة البناء
     const inflated = Number(row1.qty_salem) || 0;
     d.prepare(`UPDATE stock_moves SET qty_in_pieces = ?, weight_in_kg = ? * 20.5 / 1000
       WHERE doc_type='opening' AND item_id=1 AND bucket='salem'`).run(inflated, inflated);
-    const { changed } = repairOpenings(d);
-    assert.deepEqual(changed, [
-      { item_id: 1, item_code: '001001', bucket: 'salem', old_qty: inflated, new_qty: expected },
-    ], 'الإصلاح يعيد الافتتاح المتضخم إلى العداد ناقص صافي العمليات');
-    assertConsistent(d, 'بعد إعادة الإصلاح');
+    assert.equal(openIn(1, 'salem'), inflated);
+    rebuildOpenings(d);
+    assert.equal(openIn(1, 'salem'), expected, 'إعادة البناء تعيد الافتتاح المتضخم إلى العدّاد ناقص العمليات');
+    assertConsistent(d, 'بعد إعادة البناء من التضخم');
+    // الحذف الذي يترك حركة خارجة بلا مقابل: الافتتاح السالب يمتصها (كحذف مستند بيع)
+    d.prepare(`UPDATE items SET qty_salem = 50 WHERE id=1`).run();
+    rebuildOpenings(d);
+    assert.equal(openIn(1, 'salem'), 0, 'لا افتتاح موجب حين تتجاوز العمليات العدّاد');
+    assert.equal(openOut(1, 'salem'), 50, 'افتتاح سالب يمتص الفرق (100 عملية − 50 عداد)');
+    assertConsistent(d, 'بعد الافتتاح السالب');
+    // وكل الأصناف الأخرى أُعيد افتتاحها بلا المساس بعداداتها
+    d.prepare(`UPDATE items SET qty_salem = ? WHERE id=1`).run(inflated);
+    rebuildOpenings(d);
+    assertConsistent(d, 'نهاية إصلاح الافتتاح');
+    for (const it of d.prepare('SELECT id FROM items').all()) {
+      assert.ok(d.prepare('SELECT COUNT(*) c FROM stock_moves WHERE doc_type=? AND item_id=?')
+        .get('opening', it.id).c > 0, `الصنف ${it.id} بلا حركة افتتاح بعد البناء`);
+    }
   } finally {
     d.close();
     try { fs.unlinkSync(tmp); } catch { /* ignore */ }
@@ -120,8 +138,7 @@ test('الدورة الكاملة للعمليات المخزنية والمحا
   const { d, tmp } = fixtureDb();
   try {
     setDb(d);
-    repairOpenings(d);
-    const h = stubIpc(['purchases', 'issues', 'production', 'receives', 'returns',
+    const h = stubIpc(['purchases', 'issues', 'production', 'returns',
       'sales', 'scrap', 'transfers', 'exits', 'payments', 'tolling', 'reports']);
 
     // ===== خط الأساس: يُقرأ من القاعدة الأساسية نفسها =====
@@ -177,7 +194,7 @@ test('الدورة الكاملة للعمليات المخزنية والمحا
     }, 1);
     assert.equal(counters(d, 5).s, b5.s, 'خام العميل لا يمس سليم المصنع');
 
-    // 5) دورة الكراتين: شراء كرتين → صرف كرتون → نتيجة إنتاج
+    // 5) دورة الكراتين: شراء كرتين → صرف كرتون → سند استلام إنتاج واحد (نتيجة + استلام تام)
     const { id: purCarton } = h['purchases:save'](null, {
       doc_number: 'FC-P3', doc_date: '2026-10-23', party_id: 1, payment_method: 'credit',
       items: [{ item_id: 1, warehouse_id: 1, quantity: 2, unit: 'كرتون', carton_prefix: 'FC' }],
@@ -185,33 +202,58 @@ test('الدورة الكاملة للعمليات المخزنية والمحا
     assert.equal(counters(d, 1).s, b1.s - 2000 + 2 * P, 'شراء الكراتين يزيد السليم بحبات الكرتونين');
     const cartons = d.prepare('SELECT * FROM cartons WHERE purchase_id=? ORDER BY id').all(purCarton);
     assert.equal(cartons.length, 2, 'توليد كرتين');
-    h['issues:save'](null, {
+    const { id: issCarton } = h['issues:save'](null, {
       doc_number: 'FC-I3', doc_date: '2026-10-23', source: 'own',
       items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: [cartons[0].carton_number] }],
     }, 1);
     assert.equal(counters(d, 1).s, b1.s - 2000 + P, 'صرف الكرتون يخصم حباته من السليم');
-    h['production:save'](null, {
-      carton_id: cartons[0].id, result_date: '2026-10-23',
-      good_pieces: 12000, defect_before: 500, defect_after: 352,
-    }, 1);
-    assert.equal(counters(d, 1).s, b1.s - 2000 + P, 'نتيجة الإنتاج لا تمس السليم');
-    assert.equal(counters(d, 1).t, b1.t + 852, 'تالف نتيجة الإنتاج يزيد عداد التالف');
+    const resultDoc = {
+      doc_date: '2026-10-23', issue_permit_id: issCarton, fg_item_id: 1, warehouse_id: 1,
+      cartons: [{ carton_id: cartons[0].id, good_pieces: 12000, defect_before_pieces: 500, defect_after_pieces: 352 }],
+    };
+    const pr = h['production:save'](null, { doc_number: 'FC-PR1', ...resultDoc }, 1);
+    assert.equal(pr.issued, P, 'المصروف = حبات الكرتون لا العدد × حبات/كرتون');
+    assert.equal(pr.total, 12852);
+    assert.equal(pr.variance, 0, 'تسوية مطابقة: لا عجز ولا فائض');
+    assert.equal(counters(d, 1).s, b1.s - 2000 + P + 12000, 'التام السليم يدخل في نفس السند');
+    assert.equal(counters(d, 1).t, b1.t + 852, 'تالف قبل (خام) + تالف بعد (تام)');
     assert.equal(d.prepare('SELECT status FROM cartons WHERE id=?').get(cartons[0].id).status, 'finished');
-    assertConsistent(d, 'بعد نتيجة الإنتاج');
+    assertConsistent(d, 'بعد سند استلام الإنتاج');
+    // حذف السند يردّ أثره كله: العدّادات والحركات والكرتون يرجع مصروفاً
+    h['production:delete'](null, pr.id, 1);
+    assert.equal(counters(d, 1).s, b1.s - 2000 + P, 'سليم الصنف بعد حذف السند');
+    assert.equal(counters(d, 1).t, b1.t, 'تالف الصنف بعد حذف السند');
+    assert.equal(d.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='production'").get().c, 0);
+    assert.equal(d.prepare('SELECT status FROM cartons WHERE id=?').get(cartons[0].id).status, 'issued');
+    assertConsistent(d, 'بعد حذف سند الاستلام');
+    // ويُعاد استلامه بنفس الأرقام، فلا يتضاعف الأثر
+    const pr2 = h['production:save'](null, { doc_number: 'FC-PR1', ...resultDoc }, 1);
+    assert.equal(counters(d, 1).s, b1.s - 2000 + P + 12000, 'إعادة الاستلام تعيد الأثر مرة واحدة');
+    assert.equal(counters(d, 1).t, b1.t + 852);
+    assertConsistent(d, 'بعد إعادة الاستلام');
 
-    // 6) استلام تام من إنتاج المصنع
-    h['receives:save'](null, {
-      doc_number: 'FC-R1', doc_date: '2026-10-23', source: 'own',
-      items: [{ item_id: 1, warehouse_id: 1, quantity: 12000, unit: 'حبة' }],
+    // 6) استلام إنتاج بخام عميل: لا أثر على مخزون المصنع إطلاقاً
+    h['tolling:receiptSave'](null, {
+      doc_number: 'FC-TR0', doc_date: '2026-10-23', party_id: 2,
+      items: [{ item_id: 1, quantity: P, unit: 'حبة' }],
     }, 1);
-    assert.equal(counters(d, 1).s, b1.s - 2000 + P + 12000, 'استلام التام يزيد السليم');
-
-    // 7) استلام من خام عميل (بلا أثر مخزني)
-    h['receives:save'](null, {
-      doc_number: 'FC-R2', doc_date: '2026-10-23', source: 'customer', party_id: 2,
-      items: [{ item_id: 5, warehouse_id: 1, quantity: 500, unit: 'حبة' }],
+    const custCarton = d.prepare("SELECT * FROM cartons WHERE source='customer' ORDER BY id").get();
+    assert.equal(custCarton.pieces, P, 'كرتونة خام العميل بحبات الصنف');
+    const { id: issCust } = h['issues:save'](null, {
+      doc_number: 'FC-I4', doc_date: '2026-10-23', source: 'customer', party_id: 2,
+      items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: [custCarton.carton_number] }],
     }, 1);
-    assert.equal(counters(d, 5).s, b5.s, 'استلام خام العميل لا يمس السليم');
+    const sBefore = counters(d, 1).s;
+    const tBefore = counters(d, 1).t;
+    h['production:save'](null, {
+      doc_number: 'FC-PR2', doc_date: '2026-10-23', issue_permit_id: issCust, fg_item_id: 1, warehouse_id: 1,
+      cartons: [{ carton_id: custCarton.id, good_pieces: 500, defect_before_pieces: 0, defect_after_pieces: 0 }],
+    }, 1);
+    assert.equal(counters(d, 1).s, sBefore, 'سند خام العميل لا يمسّ سليم المصنع');
+    assert.equal(counters(d, 1).t, tBefore, 'ولا تالفه');
+    assert.equal(d.prepare(`SELECT COUNT(*) c FROM stock_moves WHERE doc_type='production'
+      AND doc_id=(SELECT id FROM production_receipts WHERE doc_number='FC-PR2')`).get().c, 0, 'بلا حركة مخزون');
+    assertConsistent(d, 'بعد استلام خام العميل');
 
     // 8) بيع نقدي
     h['sales:save'](null, {
@@ -309,9 +351,9 @@ test('الدورة الكاملة للعمليات المخزنية والمحا
     assert.equal(ledger.cashBalance(d), cb - 10000 + 30000 + 7000, 'أجرة نقدية تدخل الصندوق');
     applyLedger(2, 7000);
     const tol = h['tolling:balance']().find(r => r.id === 2);
-    assert.equal(tol.raw_in, tol0.raw_in + 10000, 'رصيد خام العميل');
+    assert.equal(tol.raw_in, tol0.raw_in + 10000 + P, 'رصيد خام العميل (العهدة + استلام الدورة)');
     assert.equal(tol.delivered_out, tol0.delivered_out + 4000, 'المسلَّم من الخام');
-    assert.equal(tol.remaining, tol0.remaining + 6000, 'المتبقي لدى المصنع');
+    assert.equal(tol.remaining, tol0.remaining + 6000 + P, 'المتبقي لدى المصنع');
 
     // 17) سند قبض من العميل و 18) سند دفع للمورد
     h['payments:save'](null, {

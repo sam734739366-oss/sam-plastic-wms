@@ -1,6 +1,9 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc, itemCombo, bucketOptions, bucketBadge } from '../ui.js';
+import {
+  toast, implicationsDialog, renderTable, attachRowMenu, rowActions, openModal, esc,
+  itemCombo, bucketOptions, bucketBadge, canWrite, unitOf,
+} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -9,16 +12,16 @@ const TYPE_LABEL = { sale: 'بيع', scrap: 'خردة', blowing_fee: 'أجرة �
 register('sales', {
   title: 'فواتير البيع',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const rows = await api.invoke('sales:list');
       el.innerHTML = `
-        <div class="toolbar"><button class="btn primary" id="btn-add">+ فاتورة بيع</button></div>
+        <div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ فاتورة بيع</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
         <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
-      el.querySelector('#btn-add').onclick = () => form(null);
-      const active = rows.filter(r => r.status !== 'void');
+      if (writable) el.querySelector('#btn-add').onclick = () => form(null);
       el.querySelector('#summary').innerHTML =
-        `عدد الفواتير: <b>${rows.length}</b> — النشطة: <b>${active.length}</b> — إجمالي النشطة: <b>${fmtMoney(active.reduce((a, r) => a + (Number(r.total) || 0), 0))}</b>`;
+        `عدد الفواتير: <b>${rows.length}</b> — الإجمالي: <b>${fmtMoney(rows.reduce((a, r) => a + (Number(r.total) || 0), 0))}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
@@ -28,17 +31,18 @@ register('sales', {
         { key: 'driver_name', label: 'السائق', render: r => r.driver_name || '—' },
         { key: 'items_count', label: 'البنود' },
         { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغاة</span>' : '<span class="tag salem">نشطة</span>' },
       ], rows);
-      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
-        const r = rows[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r.id) },
-          { label: 'طباعة', onClick: () => printDoc(r.id) },
-          { label: 'تعديل', onClick: () => edit(r.id) },
-          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
-        ];
-      });
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => rowActions({
+        id: rows[ri].id,
+        entity: 'sales',
+        valueKind: 'money',
+        label: 'الفاتورة',
+        view: (id) => view(id),
+        print: (id) => printDoc(id),
+        edit: (id) => edit(id),
+        reload: load,
+        readOnly: !writable,
+      }));
     }
 
     async function printDoc(id) {
@@ -76,19 +80,6 @@ register('sales', {
         ]);
         if (!ok) return;
         form(doc);
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('sales:get', id);
-        if (!(await implicationsDialog('إلغاء فاتورة', [
-          `سيُلغى أثر الفاتورة ${esc(doc.doc_number)} على المخزون والسلات وتُعاد الكميات.`,
-          'سيُعكس أثرها المحاسبي أيضاً: تُشطب ذمة العميل أو القبض النقدي المسجل لها.',
-        ]))) return;
-        await api.invoke('sales:void', id, currentUser().id);
-        toast('تم إلغاء الفاتورة', 'ok');
-        await load();
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
@@ -225,7 +216,7 @@ register('sales', {
               const b = row.querySelector('.p-bucket').value;
               const av = bal['qty_' + b] || 0;
               const bl = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' }[b];
-              balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} حبة`;
+              balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} ${unitOf(item)}`;
             } catch { balText.textContent = ''; }
           } else {
             balText.textContent = '';
@@ -235,7 +226,7 @@ register('sales', {
           const kg = piecesToWeightKg(pieces || 0, item?.weight_grams || 0);
           const p = parseFloat(price.value) || 0;
           const q = parseFloat(qty.value) || 0;
-          calc.textContent = `${pieces != null ? fmtNum(pieces, 0) + ' حبة' + (kg ? ' — ' + fmtNum(kg) + ' كجم' : '') : '—'}${p && q ? ' — ' + fmtMoney(p * q) : ''}`;
+          calc.textContent = `${pieces != null ? fmtNum(pieces, 0) + ' ' + unitOf(item) + (kg ? ' — ' + fmtNum(kg) + ' كجم' : '') : '—'}${p && q ? ' — ' + fmtMoney(p * q) : ''}`;
           updateTotal();
         }
         itemSel.onchange = refresh;

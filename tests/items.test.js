@@ -68,10 +68,18 @@ test('items:save rejects non-numeric code', () => {
   assert.throws(() => h['items:save'](null, { code: '', name: 'خطأ' }, 1), /كود الصنف مطلوب/);
 });
 
-test('items:save rejects unit outside the six allowed units', () => {
+test('v2: الوحدة ديناميكية — أي اسم وحدة قصير مقبول، والطويل فقط مرفوض', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
-  assert.throws(() => h['items:save'](null, { code: '103', name: 'خطأ', unit_name: 'بالة' }, 1), /الوحدة يجب أن تكون/);
+  // وحدات المصانع الحقيقية ليست قائمة مغلقة (زجاجة/عبوة/امبول/غطاء/بالة...)
+  for (const [i, unit] of ['بالة', 'زجاجة', 'عبوة', 'ملصق'].entries()) {
+    const { id } = h['items:save'](null, { code: `70${i}`, name: 'صنف ' + unit, unit_name: unit }, 1);
+    assert.equal(db.prepare('SELECT unit_name u FROM items WHERE id=?').get(id).u, unit);
+  }
+  assert.throws(() => h['items:save'](null, { code: '999', name: 'طويل', unit_name: 'و'.repeat(25) }, 1), /اسم الوحدة طويل/);
+  // بلا وحدة → «حبة» كما كان
+  const dflt = h['items:save'](null, { code: '998', name: 'بلا وحدة' }, 1);
+  assert.equal(db.prepare('SELECT unit_name u FROM items WHERE id=?').get(dflt.id).u, 'حبة');
 });
 
 test('items:save accepts carton as a unit', () => {

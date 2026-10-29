@@ -1,24 +1,38 @@
 const { getDb, withTransaction } = require('../db');
 const { audit } = require('../audit');
 const { toPieces, piecesToWeightKg } = require('../units');
-const { writeMoves, voidDoc, getBalance, bucketsDelta } = require('../stock');
+const { writeMoves, getBalance, bucketsDelta } = require('../stock');
 const { suggestNumber, checkDocNumber } = require('../docs');
+const docDelete = require('../docDelete');
 
 const DISP_LABEL = {
   to_recycled: 'إرجاع محرز', to_stock: 'إرجاع للمخزون', to_supplier: 'استرجاع مورد',
   sold_scrap: 'بيع خردة', production_defect: 'تالف إنتاج بخام عميل'
 };
 
-// سند التالف الناتج عن نتيجة إنتاج كرتون عهدة عميل: إدارته من شاشة الإنتاج،
-// وتعديله يدوياً يفصله عن الكرتون فيفقد النظام تتبعه عند الحذف أو التعديل.
+// سند التالف الناتج عن استلام إنتاج بخام عميل: إدارته من شاشة الاستلام،
+// وتعديله يدوياً يفصله عن الاستلام فيفقد النظام تتبعه عند الحذف أو التعديل.
 function assertNotAutoDoc(row) {
-  if (row && row.prod_carton_id) {
-    throw new Error('سند التالف هذا آلي من نتيجة إنتاج — عدّل النتيجة نفسها من شاشة الإنتاج');
+  if (row && row.prod_receipt_id) {
+    throw new Error('سند التالف هذا آلي من استلام الإنتاج — عدّل الاستلام نفسه من شاشة الإنتاج');
   }
 }
 
+// الحذف يدوي محظور على السندات الآلية، والرسالة تذكر رقم الاستلام صاحبها.
+const SCRAP_SPEC = {
+  table: 'scrap_movements',
+  docType: 'scrap',
+  auditEntity: 'scrap',
+  value: (db, id) => db.prepare('SELECT COALESCE(pieces,0) p FROM scrap_movements WHERE id=?').get(id).p,
+  deps: [
+    (db, id) => db.prepare(`SELECT r.doc_number FROM scrap_movements s
+      JOIN production_receipts r ON r.id = s.prod_receipt_id WHERE s.id=?`).all(id)
+      .map((r) => ({ label: 'استلام إنتاج أنشأ هذا السند آلياً', number: r.doc_number })),
+  ],
+};
+
 // حساب توزيع الخصم: يخصم من التالف أولاً والباقي من السليم.
-// يُخزَّن التوزيع مع السند لعكس الأثر بدقة عند التعديل والإلغاء.
+// يُخزَّن التوزيع مع السند لعكس الأثر بدقة عند التعديل والحذف.
 function computeDeltas(db, doc) {
   const item = db.prepare('SELECT * FROM items WHERE id=?').get(doc.item_id);
   if (!item) throw new Error('صنف غير موجود');
@@ -89,6 +103,10 @@ module.exports = function register(ipcMain) {
     if (!doc.doc_date) throw new Error('التاريخ مطلوب');
     if (!doc.item_id) throw new Error('اختر الصنف');
     if (!DISP_LABEL[doc.disposition]) throw new Error('اختر مصير التالف');
+    // مصير «تالف إنتاج» ملك شاشة استلام الإنتاج وحدها: تنشئه الآلي مرتبط بالاستلام
+    if (doc.disposition === 'production_defect') {
+      throw new Error('سند «تالف إنتاج بخام عميل» يُنشأ آلياً مع استلام الإنتاج — اختر مصيراً آخر');
+    }
     if (!checkDocNumber(db, 'scrap_movements', number, doc.id)) throw new Error('رقم السند مكرر');
     const item = db.prepare('SELECT * FROM items WHERE id=?').get(doc.item_id);
     if (!item) throw new Error('صنف غير موجود');
@@ -108,22 +126,28 @@ module.exports = function register(ipcMain) {
       // عكس أثر السند القديم أولاً (بدقة حسب التوزيع المخزن)
       if (before) applyStored(db, before, -1);
       const d = isCustomer ? { talef_take: 0, salem_take: 0 } : computeDeltas(db, doc);
+      // الحبات المرجعية للسند = ما حُسِب التوزيع عليه فعلاً. سند أُدخل بالوزن وحده كان
+      // يخزّن pieces=0 بينما يضيف الحبات المشتقة إلى عدّاد المحرز، فيبقى أثر زائد بعد الحذف
+      // (لأن الحذف يردّ الحركات، والحركات كانت صفرية). توحيدهما يجعل العكس دقيقاً.
+      const piecesTotal = pieces > 0
+        ? pieces
+        : (Number(d.talef_take) || 0) + (Number(d.salem_take) || 0);
       if (id) {
         db.prepare(`UPDATE scrap_movements SET doc_number=?, doc_date=?, item_id=?, disposition=?, warehouse_id=?, party_id=?,
           pieces=?, weight_kg=?, price=?, talef_take=?, salem_take=?, is_customer=?, notes=? WHERE id=?`)
           .run(number, doc.doc_date, doc.item_id, doc.disposition, doc.warehouse_id || null,
-            doc.party_id || null, pieces, weight, doc.price || null, d.talef_take, d.salem_take, isCustomer, doc.notes || null, id);
+            doc.party_id || null, piecesTotal, weight, doc.price || null, d.talef_take, d.salem_take, isCustomer, doc.notes || null, id);
       } else {
         id = db.prepare(`INSERT INTO scrap_movements
           (doc_number, doc_date, item_id, disposition, warehouse_id, party_id, pieces, weight_kg, price,
            talef_take, salem_take, is_customer, notes, created_by)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
           .run(number, doc.doc_date, doc.item_id, doc.disposition, doc.warehouse_id || null,
-            doc.party_id || null, pieces, weight, doc.price || null,
+            doc.party_id || null, piecesTotal, weight, doc.price || null,
             d.talef_take, d.salem_take, isCustomer, doc.notes || null, userId).lastInsertRowid;
       }
       const moves = [];
-      const kg = weight || piecesToWeightKg(pieces, item.weight_grams || 0);
+      const kg = weight || piecesToWeightKg(piecesTotal, item.weight_grams || 0);
       if (!isCustomer) {
         const talefTake = Number(d.talef_take) || 0;
         const salemTake = Number(d.salem_take) || 0;
@@ -144,7 +168,7 @@ module.exports = function register(ipcMain) {
         const pushOut = (qty, bucket) => {
           if (qty > 0) moves.push({
             item_id: item.id, warehouse_id: doc.warehouse_id,
-            qty_out_pieces: qty, weight_out_kg: kg * qty / Math.max(1, pieces),
+            qty_out_pieces: qty, weight_out_kg: kg * qty / Math.max(1, piecesTotal),
             bucket, notes: doc.notes,
           });
         };
@@ -154,7 +178,7 @@ module.exports = function register(ipcMain) {
           pushOut(salemTake, 'salem');
           moves.push({
             item_id: item.id, warehouse_id: doc.warehouse_id,
-            qty_in_pieces: pieces, weight_in_kg: kg,
+            qty_in_pieces: piecesTotal, weight_in_kg: kg,
             bucket: doc.disposition === 'to_recycled' ? 'muharraz' : 'salem', notes: doc.notes,
           });
         } else { // sold_scrap / to_supplier: خروج نهائي
@@ -167,21 +191,11 @@ module.exports = function register(ipcMain) {
       const savedRow = db.prepare('SELECT * FROM scrap_movements WHERE id=?').get(id);
       applyStored(db, savedRow, 1);
     });
-    audit(db, userId, isNew ? 'create' : 'update', 'scrap_movement', id, before, doc);
+    audit(db, userId, isNew ? 'create' : 'update', 'scrap', id, before, doc);
     return { id };
   });
 
-  ipcMain.handle('scrap:void', (e, id, userId) => {
-    const db = getDb();
-    const before = db.prepare('SELECT * FROM scrap_movements WHERE id=?').get(id);
-    if (!before) throw new Error('السند غير موجود');
-    assertNotAutoDoc(before);
-    withTransaction(db, () => {
-      voidDoc(db, 'scrap', id, userId);
-      applyStored(db, before, -1);
-      db.prepare(`UPDATE scrap_movements SET status='void' WHERE id=?`).run(id);
-    });
-    audit(db, userId, 'void', 'scrap_movement', id, before, null);
-    return { ok: true };
-  });
+  ipcMain.handle('scrap:impact', (e, id) => docDelete.impact(getDb(), SCRAP_SPEC, id));
+
+  ipcMain.handle('scrap:delete', (e, id, userId) => docDelete.hardDelete(getDb(), SCRAP_SPEC, id, userId));
 };

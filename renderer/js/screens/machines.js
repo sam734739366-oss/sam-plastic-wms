@@ -1,44 +1,49 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, confirmDialog, renderTable, attachRowMenu, openModal, esc } from '../ui.js';
+import { toast, confirmDialog, renderTable, attachRowMenu, rowActions, openModal, esc, canWrite } from '../ui.js';
 
 register('machines', {
   title: 'المكائن',
   async mount(el) {
     let rows = [];
+    const writable = canWrite();
 
     el.innerHTML = `
       <div class="toolbar">
-        <button class="btn primary" id="btn-add">+ إضافة مكينة</button>
+        ${writable ? '<button class="btn primary" id="btn-add">+ إضافة مكينة</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإضافة أو التعديل أو الحذف</span>'}
       </div>
       <div id="summary" class="summary-line"></div>
       <div id="table-wrap"></div>`;
 
-    el.querySelector('#btn-add').onclick = () => edit(null, refresh);
+    if (writable) el.querySelector('#btn-add').onclick = () => edit(null, refresh);
 
     function renderTableData() {
       el.querySelector('#summary').innerHTML = `عدد المكائن: <b>${rows.length}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'name', label: 'الاسم' },
-        { key: 'notes', label: 'ملاحظات', render: r => r.notes || '—' },
+        { key: 'notes', label: 'ملاحظات', render: r => esc(r.notes || '—') },
       ], rows);
 
       attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
         const r = rows[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r) },
-          { label: 'تعديل', onClick: () => edit(r, refresh) },
-          { label: 'حذف', danger: true, onClick: async () => {
-            if (!(await confirmDialog(`حذف المكينة «${esc(r.name)}»؟`))) return;
+        return rowActions({
+          id: r.id,
+          view: () => view(r),
+          edit: () => edit(r, refresh),
+          del: async () => {
+            if (!(await confirmDialog(`حذف المكينة «${esc(r.name)}» نهائياً؟ يُحذف سجلها ولا يمكن التراجع.`))) return false;
             try {
               await api.invoke('machines:delete', r.id, currentUser().id);
               toast('تم الحذف', 'ok');
-              await refresh();
+              return true;
             } catch (e) {
               toast(String(e.message || e), 'err');
+              return false;
             }
-          } },
-        ];
+          },
+          reload: refresh,
+          readOnly: !writable,
+        });
       });
     }
 

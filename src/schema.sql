@@ -1,3 +1,6 @@
+-- مخطط الإصدار 2.0.0 — «الحبة هي الملك» والحذف الفعلي بلا حالة «ملغى»
+-- لا يوجد عمود status في أي مستند: الحذف يمسح الصفوف فعلياً ويردّ أثرها فوراً.
+-- cartons.status استثناء مقصود: هو حالة فيزيائية للكرتون (في المخزن/صرف/أنتج) لا حالة إلغاء.
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
@@ -10,6 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
+-- الوحدة الأساس لكل الأصناف هي الحبة. الكيس والكرتون والشدة مجرد مقابلات يعرضها التطبيق،
+-- وunit_name هو التسمية التي تظهر بدل كلمة «حبة» في كل الشاشات والطباعة (زجاجة/غطاء/كيس/أمبولة...).
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   code TEXT NOT NULL UNIQUE,
@@ -75,7 +80,6 @@ CREATE TABLE IF NOT EXISTS purchases (
   party_id INTEGER REFERENCES parties(id),
   notes TEXT,
   payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit')),
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -92,7 +96,7 @@ CREATE TABLE IF NOT EXISTS purchase_items (
   unit_price REAL,
   total_price REAL,
   notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem'
+  bucket TEXT NOT NULL DEFAULT 'salem' CHECK (bucket IN ('salem','talef','muharraz'))
 );
 
 CREATE TABLE IF NOT EXISTS cartons (
@@ -103,7 +107,7 @@ CREATE TABLE IF NOT EXISTS cartons (
   pieces INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'in_stock' CHECK (status IN ('in_stock','issued','finished')),
   issue_date TEXT,
-  issue_permit_id INTEGER,
+  issue_permit_id INTEGER REFERENCES issue_permits(id),
   notes TEXT,
   -- الكرتون قد يكون من خام المصنع أو من خام عميل (النفخ للغير).
   -- كراتين العميل بلا أي أثر على مخزون المصنع وسلاته، وتُخصم من رصيد العميل.
@@ -122,7 +126,6 @@ CREATE TABLE IF NOT EXISTS issue_permits (
   source TEXT NOT NULL DEFAULT 'own' CHECK (source IN ('own','customer')),
   party_id INTEGER REFERENCES parties(id),
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -138,57 +141,57 @@ CREATE TABLE IF NOT EXISTS issue_items (
   weight_kg REAL NOT NULL,
   carton_ids TEXT,
   notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem'
+  bucket TEXT NOT NULL DEFAULT 'salem' CHECK (bucket IN ('salem','talef','muharraz'))
 );
 
-CREATE TABLE IF NOT EXISTS production_results (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  carton_id INTEGER NOT NULL UNIQUE REFERENCES cartons(id),
-  issue_permit_id INTEGER REFERENCES issue_permits(id),
-  machine_id INTEGER REFERENCES machines(id),
-  shift_id INTEGER REFERENCES shifts(id),
-  result_date TEXT NOT NULL,
-  good_pieces INTEGER NOT NULL DEFAULT 0,
-  defect_before INTEGER NOT NULL DEFAULT 0,
-  defect_after INTEGER NOT NULL DEFAULT 0,
-  notes TEXT,
-  created_by INTEGER REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS receive_permits (
+-- ===== استلام الإنتاج (المستند الموحّد) =====
+-- يدمج «نتيجة الإنتاج» و«استلام التام» في مستند واحد: يُختار تصريح الصرف، وتُسجَّل
+-- نتيجة كل كرتون (سليم/تالف قبل/تالف بعد)، فيُوزَّع الأثر تلقائياً:
+--   سليم (+الفائض)   → تام سليم   في مخزن الاستلام
+--   تالف بعد         → تام تالف
+--   تالف قبل         → خام تالف    (صنف الخام الذي جاء منه الكرتون)
+--   عجز (مصروف > منتج) → يُسجَّل في الفارق فقط، بلا حركة مخزون
+CREATE TABLE IF NOT EXISTS production_receipts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   doc_number TEXT NOT NULL UNIQUE,
   doc_date TEXT NOT NULL,
+  issue_permit_id INTEGER NOT NULL REFERENCES issue_permits(id),
   machine_id INTEGER REFERENCES machines(id),
   shift_id INTEGER REFERENCES shifts(id),
+  receiver_name TEXT,
+  -- مصدر الخام: own = خام المصنع، customer = النفخ للغير (عهدة عميل)
   source TEXT NOT NULL DEFAULT 'own' CHECK (source IN ('own','customer')),
   party_id INTEGER REFERENCES parties(id),
-  issue_permit_id INTEGER REFERENCES issue_permits(id),
-  receiver_name TEXT,
+  -- الصنف النهائي المنتَج ومخزنه: الاستلام كلّه لصنف واحد (دفعة ماكينة/وردية واحدة)
+  fg_item_id INTEGER NOT NULL REFERENCES items(id),
+  warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+  -- الأرصدة المحسوبة المخزّنة للتقرير والتسوية (الحبات هي الوحدة المرجعية)
+  issued_pieces INTEGER NOT NULL DEFAULT 0,
+  good_pieces INTEGER NOT NULL DEFAULT 0,
+  defect_before_pieces INTEGER NOT NULL DEFAULT 0,
+  defect_after_pieces INTEGER NOT NULL DEFAULT 0,
+  total_pieces INTEGER NOT NULL DEFAULT 0,
+  -- موجب = عجز (مصروف أكثر من المنتج)، سالب = فائض أُضيف إلى التام السليم
+  variance_pieces INTEGER NOT NULL DEFAULT 0,
+  surplus_pieces INTEGER NOT NULL DEFAULT 0,
+  -- تعبئة التام: أكياس مكتملة + كسور، والأكياس المستهلكة = مكتملة + كيس للكسور
+  bags INTEGER NOT NULL DEFAULT 0,
+  breaks INTEGER NOT NULL DEFAULT 0,
+  bags_used INTEGER NOT NULL DEFAULT 0,
+  bag_item_id INTEGER REFERENCES items(id),
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
-CREATE TABLE IF NOT EXISTS receive_items (
+CREATE TABLE IF NOT EXISTS production_receipt_cartons (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  receive_permit_id INTEGER NOT NULL REFERENCES receive_permits(id) ON DELETE CASCADE,
-  item_id INTEGER NOT NULL REFERENCES items(id),
-  warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
-  quantity REAL NOT NULL,
-  unit TEXT NOT NULL,
-  pieces INTEGER NOT NULL,
-  weight_kg REAL NOT NULL,
-  notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem',
-  -- أكياس الاستلام: quantity هو عدد الأكياس المكتملة، و breaks الحبات المفردة بعدها.
-  -- bags_used = المكتملة + كيس واحد إن وُجدت كسور. bag_item_id هو صنف الأكياس الذي خُصم
-  -- (null يعني بلا خصم: إما لأن المصدر خام عميل أو لأن الصنف غير مربوط بصنف أكياس).
-  breaks INTEGER NOT NULL DEFAULT 0,
-  bags_used INTEGER NOT NULL DEFAULT 0,
-  bag_item_id INTEGER REFERENCES items(id)
+  receipt_id INTEGER NOT NULL REFERENCES production_receipts(id) ON DELETE CASCADE,
+  carton_id INTEGER NOT NULL REFERENCES cartons(id),
+  good_pieces INTEGER NOT NULL DEFAULT 0,
+  defect_before_pieces INTEGER NOT NULL DEFAULT 0,
+  defect_after_pieces INTEGER NOT NULL DEFAULT 0,
+  notes TEXT
 );
 
 CREATE TABLE IF NOT EXISTS invoices (
@@ -201,7 +204,6 @@ CREATE TABLE IF NOT EXISTS invoices (
   driver_name TEXT,
   car_number TEXT,
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -218,7 +220,7 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   unit_price REAL,
   total_price REAL,
   notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem'
+  bucket TEXT NOT NULL DEFAULT 'salem' CHECK (bucket IN ('salem','talef','muharraz'))
 );
 
 CREATE TABLE IF NOT EXISTS exit_permits (
@@ -230,7 +232,6 @@ CREATE TABLE IF NOT EXISTS exit_permits (
   car_number TEXT,
   destination TEXT,
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -245,7 +246,7 @@ CREATE TABLE IF NOT EXISTS exit_items (
   pieces INTEGER NOT NULL,
   weight_kg REAL NOT NULL,
   notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem'
+  bucket TEXT NOT NULL DEFAULT 'salem' CHECK (bucket IN ('salem','talef','muharraz'))
 );
 
 CREATE TABLE IF NOT EXISTS customer_raw_receipts (
@@ -254,7 +255,6 @@ CREATE TABLE IF NOT EXISTS customer_raw_receipts (
   doc_date TEXT NOT NULL,
   party_id INTEGER NOT NULL REFERENCES parties(id),
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -278,7 +278,6 @@ CREATE TABLE IF NOT EXISTS customer_deliveries (
   party_id INTEGER NOT NULL REFERENCES parties(id),
   invoice_id INTEGER REFERENCES invoices(id),
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -299,7 +298,7 @@ CREATE TABLE IF NOT EXISTS scrap_movements (
   doc_number TEXT NOT NULL UNIQUE,
   doc_date TEXT NOT NULL,
   item_id INTEGER NOT NULL REFERENCES items(id),
-  -- production_defect: تالف ناتج عن نتيجة إنتاج كرتون بخام عميل — سند يُدار آلياً
+  -- production_defect: تالف استلام إنتاج بخام عميل — سند يُدار آلياً مع الاستلام
   disposition TEXT NOT NULL CHECK (disposition IN ('to_recycled','to_stock','to_supplier','sold_scrap','production_defect')),
   warehouse_id INTEGER REFERENCES warehouses(id),
   party_id INTEGER REFERENCES parties(id),
@@ -310,11 +309,10 @@ CREATE TABLE IF NOT EXISTS scrap_movements (
   salem_take INTEGER NOT NULL DEFAULT 0,
   is_customer INTEGER NOT NULL DEFAULT 0,
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-  -- لا يوجد doc_id في هذا الجدول (هو في stock_moves)، فربط سند التالف بالكرتون هنا
-  prod_carton_id INTEGER REFERENCES cartons(id)
+  -- سند التالف التلقائي تابع لاستلام إنتاج بعينه (عكس prod_carton_id القديم على مستوى الكرتون)
+  prod_receipt_id INTEGER REFERENCES production_receipts(id) ON DELETE CASCADE
 );
 
 -- مرتجعات البيع: إرجاع العميل بضاعة من فاتورة بيع (ترجع للمخزون وتخفض ذمة العميل)
@@ -326,7 +324,6 @@ CREATE TABLE IF NOT EXISTS sales_returns (
   party_id INTEGER REFERENCES parties(id),
   payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit')),
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -343,7 +340,7 @@ CREATE TABLE IF NOT EXISTS sales_return_items (
   unit_price REAL,
   total_price REAL,
   notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem'
+  bucket TEXT NOT NULL DEFAULT 'salem' CHECK (bucket IN ('salem','talef','muharraz'))
 );
 
 -- مرتجعات الشراء: إرجاع المصنع بضاعة للمورد (تخرج من المخزون وتخفض ذمة المورد)
@@ -355,7 +352,6 @@ CREATE TABLE IF NOT EXISTS purchase_returns (
   party_id INTEGER REFERENCES parties(id),
   payment_method TEXT NOT NULL DEFAULT 'credit' CHECK (payment_method IN ('cash','credit')),
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -372,7 +368,7 @@ CREATE TABLE IF NOT EXISTS purchase_return_items (
   unit_price REAL,
   total_price REAL,
   notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem'
+  bucket TEXT NOT NULL DEFAULT 'salem' CHECK (bucket IN ('salem','talef','muharraz'))
 );
 
 CREATE TABLE IF NOT EXISTS transfers (
@@ -382,7 +378,6 @@ CREATE TABLE IF NOT EXISTS transfers (
   from_warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
   to_warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -396,9 +391,10 @@ CREATE TABLE IF NOT EXISTS transfer_items (
   pieces INTEGER NOT NULL,
   weight_kg REAL NOT NULL,
   notes TEXT,
-  bucket TEXT NOT NULL DEFAULT 'salem'
+  bucket TEXT NOT NULL DEFAULT 'salem' CHECK (bucket IN ('salem','talef','muharraz'))
 );
 
+-- دفتر الحركة المخزني: يُحذف مع مستنده عند الحذف الفعلي، ويُعاد بناء الأثر للعدّادات
 CREATE TABLE IF NOT EXISTS stock_moves (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   doc_type TEXT NOT NULL,
@@ -417,6 +413,7 @@ CREATE TABLE IF NOT EXISTS stock_moves (
 
 CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_moves(item_id, warehouse_id);
 CREATE INDEX IF NOT EXISTS idx_stock_doc ON stock_moves(doc_type, doc_id);
+CREATE INDEX IF NOT EXISTS idx_stock_date ON stock_moves(doc_date);
 
 CREATE TABLE IF NOT EXISTS party_ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -430,7 +427,6 @@ CREATE TABLE IF NOT EXISTS party_ledger (
   cash_in REAL NOT NULL DEFAULT 0,
   cash_out REAL NOT NULL DEFAULT 0,
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -446,7 +442,6 @@ CREATE TABLE IF NOT EXISTS payments (
   direction TEXT NOT NULL CHECK (direction IN ('in','out')),
   amount REAL NOT NULL,
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -466,3 +461,12 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- فهارس تُبنى بعد المخطط مباشرة (لا حاجة لترحيلها في db.js لأن المخطط جديد بالكامل)
+CREATE INDEX IF NOT EXISTS idx_cartons_source ON cartons(source, party_id, status);
+CREATE INDEX IF NOT EXISTS idx_cartons_receipt ON cartons(receipt_id);
+CREATE INDEX IF NOT EXISTS idx_cartons_issue ON cartons(issue_permit_id);
+CREATE INDEX IF NOT EXISTS idx_receipt_cartons ON production_receipt_cartons(receipt_id);
+CREATE INDEX IF NOT EXISTS idx_receipt_carton ON production_receipt_cartons(carton_id);
+CREATE INDEX IF NOT EXISTS idx_receipt_issue ON production_receipts(issue_permit_id);
+CREATE INDEX IF NOT EXISTS idx_scrap_prod_receipt ON scrap_movements(prod_receipt_id);

@@ -37,23 +37,44 @@ function stubIpc(files) {
 
 const salem = (db, id) => db.prepare('SELECT qty_salem s FROM items WHERE id=?').get(id).s;
 
-test('تعديل استلام من خام عميل لا يمس رصيد السليم', () => {
+test('تعديل سند استلام من خام عميل لا يمس رصيد السليم', () => {
   const db = makeDb(); setDb(db);
-  const h = stubIpc(['receives']);
-  const { id } = h['receives:save'](null, {
-    doc_number: 'R-C1', doc_date: '2026-10-02', source: 'customer', party_id: 2,
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 500, unit: 'حبة' }],
+  const h = stubIpc(['purchases', 'issues', 'production', 'tolling', 'scrap']);
+  // خام العميل يدخل كراتين C- بلا أثر على عدّادات المصنع
+  h['tolling:receiptSave'](null, {
+    doc_number: 'TR-C1', doc_date: '2026-10-02', party_id: 2,
+    items: [{ item_id: 1, quantity: 2000, unit: 'حبة' }],
   }, 1);
-  assert.equal(salem(db, 1), 5000, 'استلام خام العميل لا يزيد السليم');
-  // تعديل بنود الاستلام (كمية أقل) — يجب ألا يغيّر السليم إطلاقاً
-  h['receives:save'](null, {
-    id, doc_number: 'R-C1', doc_date: '2026-10-02', source: 'customer', party_id: 2,
-    items: [{ item_id: 1, warehouse_id: 1, quantity: 300, unit: 'حبة' }],
+  const carton = db.prepare("SELECT id, pieces FROM cartons WHERE carton_number='C-1'").get();
+  assert.equal(carton.pieces, 1000, 'كرتونة خام العميل بحبات الصنف');
+  const { id: issId } = h['issues:save'](null, {
+    doc_number: 'I-C0', doc_date: '2026-10-02', source: 'customer', party_id: 2,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: ['C-1'] }],
   }, 1);
-  assert.equal(salem(db, 1), 5000, 'تعديل استلام العميل يجب ألا ينقص السليم');
+  const s0 = salem(db, 1);
+  const t0 = db.prepare('SELECT qty_talef t FROM items WHERE id=1').get().t;
+  const r = h['production:save'](null, {
+    doc_number: 'R-C1', doc_date: '2026-10-02', issue_permit_id: issId, fg_item_id: 2, warehouse_id: 1,
+    cartons: [{ carton_id: carton.id, good_pieces: 800, defect_before_pieces: 100, defect_after_pieces: 100 }],
+  }, 1);
+  assert.equal(salem(db, 1), s0, 'استلام خام العميل لا يزيد السليم');
+  assert.equal(db.prepare('SELECT qty_talef t FROM items WHERE id=1').get().t, t0, 'ولا يزيد تالف المصنع');
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='production'").get().c, 0);
+  const sc = db.prepare('SELECT * FROM scrap_movements WHERE is_customer=1').get();
+  assert.equal(sc.pieces, 200, 'التالف قبل+بعد يُنسب لرصيد العميل');
+  assert.equal(h['tolling:balance']().find((x) => x.id === 2).remaining, 2000 - 200);
+  // تعديل السند بكمية أقل — يجب ألا يغيّر السليم إطلاقاً ولا يضاعف التالف
+  h['production:save'](null, {
+    id: r.id, doc_number: 'R-C1', doc_date: '2026-10-02', issue_permit_id: issId, fg_item_id: 2, warehouse_id: 1,
+    cartons: [{ carton_id: carton.id, good_pieces: 900, defect_before_pieces: 50, defect_after_pieces: 50 }],
+  }, 1);
+  assert.equal(salem(db, 1), s0, 'تعديل استلام العميل يجب ألا ينقص السليم');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements').get().c, 1, 'سند التالف يتحدّث لا يتكرّر');
+  assert.equal(db.prepare('SELECT pieces p FROM scrap_movements').get().p, 100);
+  assert.equal(h['tolling:balance']().find((x) => x.id === 2).remaining, 2000 - 100);
 });
 
-test('تعديل وإلغاء صرف من خام عميل لا يمس رصيد السليم', () => {
+test('تعديل وحذف صرف من خام عميل لا يمسّان رصيد السليم', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['issues']);
   const { id } = h['issues:save'](null, {
@@ -61,13 +82,16 @@ test('تعديل وإلغاء صرف من خام عميل لا يمس رصيد �
     items: [{ item_id: 1, warehouse_id: 1, quantity: 500, unit: 'حبة' }],
   }, 1);
   assert.equal(salem(db, 1), 5000, 'صرف خام العميل لا ينقص السليم');
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='issue'").get().c, 0);
   h['issues:save'](null, {
     id, doc_number: 'I-C1', doc_date: '2026-10-02', source: 'customer', party_id: 2,
     items: [{ item_id: 1, warehouse_id: 1, quantity: 300, unit: 'حبة' }],
   }, 1);
   assert.equal(salem(db, 1), 5000, 'تعديل صرف العميل يجب ألا يزيد السليم');
-  h['issues:void'](null, id, 1);
-  assert.equal(salem(db, 1), 5000, 'إلغاء صرف العميل يجب ألا يزيد السليم');
+  h['issues:delete'](null, id, 1);
+  assert.equal(salem(db, 1), 5000, 'حذف صرف العميل يجب ألا يزيد السليم');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM issue_permits WHERE id=?').get(id).c, 0, 'لا صفاً «ملغى» خلفه');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM issue_items WHERE issue_permit_id=?').get(id).c, 0);
 });
 
 test('تعديل مرتجع شراء لا يخصم السليم مرتين', () => {

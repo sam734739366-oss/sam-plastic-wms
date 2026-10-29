@@ -70,13 +70,13 @@ test('التقارير لا تحمل أي عمود وزن في أعمدتها', 
 
 // ------------------------------------------------------------------ وحدة العرض
 
-test('وحدة العرض تعرض كرتون/كيس وتُبقي الحساب بالحبة', () => {
+test('وحدة العرض تعرض كرتون/كيس وتُبقي الحساب بالحبة، والتسمية من unit_name الصنف', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'reports']);
   buy(h, 'P-1', '2026-10-10', 1, 1, 500, 5);
 
   const pieces = h['reports:purchases'](null, { unit: 'pieces' });
-  assert.equal(pieces.rows[0].qty_label, '500 حبة');
+  assert.equal(pieces.rows[0].qty_label, '500 عبوة', '«حبة» تُستبدل بتسمية وحدة الصنف في العرض');
   assert.equal(pieces.rows[0].qty, 500, 'القيمة الرقمية تبقى بالحبة');
 
   const carton = h['reports:purchases'](null, { unit: 'carton' });
@@ -85,18 +85,18 @@ test('وحدة العرض تعرض كرتون/كيس وتُبقي الحساب �
   const bag = h['reports:purchases'](null, { unit: 'bag' });
   assert.equal(bag.rows[0].qty_label, '10 كيس', '500 ÷ 50 حبة/كيس');
 
-  // الافتراضي بلا وحدة معلّمة = حبة
-  assert.equal(h['reports:purchases'](null, {}).rows[0].qty_label, '500 حبة');
+  // الافتراضي بلا وحدة معلّمة = حبات الصنف
+  assert.equal(h['reports:purchases'](null, {}).rows[0].qty_label, '500 عبوة');
   // الإجمالي العام يبقى بالحبة: جمع كرتون أصناف مختلفة غير ذي معنى
   assert.equal(carton.total_qty_label, '500 حبة');
 });
 
-test('صنف بلا حجم تعبئة يرجع للحبة بدل قسمة على صفر', () => {
+test('صنف بلا حجم تعبئة يرجع لتسمية وحدته بدل قسمة على صفر', () => {
   const db = makeDb(); setDb(db);
   db.prepare('UPDATE items SET pieces_per_carton = NULL, pieces_per_bag = NULL WHERE id = 1').run();
   const h = stubIpc(['purchases', 'reports']);
   buy(h, 'P-1', '2026-10-10', 1, 1, 300, 5);
-  assert.equal(h['reports:purchases'](null, { unit: 'carton' }).rows[0].qty_label, '300 حبة');
+  assert.equal(h['reports:purchases'](null, { unit: 'carton' }).rows[0].qty_label, '300 عبوة');
 });
 
 // ------------------------------------------------------------------ المنصرف للإنتاج
@@ -184,30 +184,43 @@ test('العهَد لعميل بخام من صنفين لا يحوّل الإج�
 
 // ------------------------------------------------------------------ التالف
 
-test('تقرير التالف يميّز مصدر السند: نتيجة إنتاج أم يدوي', () => {
+test('تقرير التالف يميّز مصدر السند: استلام إنتاج آلي أم سند يدوي', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'tolling', 'issues', 'production', 'scrap', 'reports']);
-  // كرتون عميل بتالف 300 قبل + 200 بعد ⇒ سند آلي بمصدر مركّب
+  // كرتونة عميل (100 حبة) بتالف 30 قبل + 20 بعد ⇒ سند آلي واحد على مستوى السند
   h['tolling:receiptSave'](null, { doc_number: 'R-1', doc_date: '2026-10-01', party_id: 2,
-    items: [{ item_id: 1, quantity: 10000, unit: 'عبوة' }] }, 1);
+    items: [{ item_id: 1, quantity: 1000, unit: 'عبوة' }] }, 1);
   const c = db.prepare("SELECT id FROM cartons WHERE carton_number = 'C-1'").get();
-  h['issues:save'](null, { doc_number: 'I-C', doc_date: '2026-10-02', source: 'customer', party_id: 2,
+  assert.ok(c, 'كراتين C- لخام العميل');
+  const { id: issId } = h['issues:save'](null, { doc_number: 'I-C', doc_date: '2026-10-02', source: 'customer', party_id: 2,
     items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: ['C-1'] }] }, 1);
-  h['production:save'](null, { carton_id: c.id, result_date: '2026-10-03', good_pieces: 4500, defect_before: 300, defect_after: 200 }, 1);
-  // وسند يدوي على مخزون المصنع
+  const rec = h['production:save'](null, { doc_number: 'PR-9', doc_date: '2026-10-03', issue_permit_id: issId,
+    fg_item_id: 2, warehouse_id: 1,
+    cartons: [{ carton_id: c.id, good_pieces: 50, defect_before_pieces: 30, defect_after_pieces: 20 }] }, 1);
+  // وورد تالف يدوي على مخزون المصنع
   buy(h, 'P-1', '2026-10-05', 1, 1, 500, 5);
   h['scrap:save'](null, { doc_number: 'S-9', doc_date: '2026-10-06', item_id: 1,
     disposition: 'to_recycled', warehouse_id: 1, pieces: 50, weight_kg: 1.25 }, 1);
 
   const data = h['reports:scrap'](null, {});
-  const auto = data.rows.find(r => r.doc_number === 'تالف إنتاج C-1');
-  assert.ok(auto, 'السند الآلي يظهر في التقرير');
-  assert.equal(auto.source_label, 'تالف قبل + بعد');
-  assert.equal(auto.qty, 500);
+  const auto = data.rows.find(r => r.doc_number === 'تالف إنتاج PR-9');
+  assert.ok(auto, 'السند الآلي يظهر في التقرير باسم الاستلام صاحبهِ');
+  assert.equal(auto.qty, 50, 'تالف قبل + بعد على العميل معاً');
+  assert.equal(auto.source_label, 'تالف قبل + بعد — سند PR-9');
+  assert.equal(auto.is_customer, 1);
+  assert.equal(auto.receipt_number, 'PR-9');
+  assert.equal(auto.defect_before, 30);
+  assert.equal(auto.defect_after, 20);
+  assert.equal(auto.warehouse_id, null, 'سند العهدة بلا مخزن للمصنع');
+  assert.equal(Object.keys(auto).some((k) => /weight|_kg/.test(k)), false, 'لا أعمدة وزن في التقارير');
   const manual = data.rows.find(r => r.doc_number === 'S-9');
   assert.equal(manual.source_label, 'سند يدوي');
   // فلتر المخزن يُسقط سند العميل (بلا مخزن) لأن مخزنه null
   assert.equal(h['reports:scrap'](null, { warehouseId: 1 }).rows.map(r => r.doc_number).join(','), 'S-9');
+  // وحذف الاستلام يمحى السند الآلي من التقرير (بقي أثره؟ لا — يُمحى معه)
+  h['production:delete'](null, rec.id, 1);
+  assert.equal(h['reports:scrap'](null, {}).rows.map(r => r.doc_number).join(','), 'S-9');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements WHERE prod_receipt_id=?').get(rec.id).c, 0);
 });
 
 // ------------------------------------------------------------------ أرصدة المخازن
@@ -230,10 +243,10 @@ test('أرصدة المخازن تفصّل لكل مخزن وتجمع عند «�
   const item1 = h['reports:stockBalances'](null, { itemId: 1, warehouseId: 'all' });
   assert.equal(item1.rows.length, 2);
   assert.equal(item1.total_pieces, 800);
-  assert.equal(item1.rows[0].qty_salem_label, '500 حبة');
+  assert.equal(item1.rows[0].qty_salem_label, '500 عبوة');
   assert.equal(item1.rows[0].qty_talef, 0);
   assert.equal(item1.rows[0].qty_muharraz, 0);
-  assert.equal(item1.rows[0].total_pieces_label, '500 حبة');
+  assert.equal(item1.rows[0].total_pieces_label, '500 عبوة');
 });
 
 test('الأرصدة تُخفي الأصناف المكمّلة والصفوف صفرية الرصيد', () => {

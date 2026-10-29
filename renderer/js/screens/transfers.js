@@ -1,22 +1,25 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc , itemCombo, bucketOptions, bucketBadge} from '../ui.js';
+import {
+  toast, implicationsDialog, renderTable, attachRowMenu, rowActions, openModal, esc,
+  itemCombo, bucketOptions, bucketBadge, canWrite, unitOf,
+} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtNum, today } from '../fmt.js';
 
 register('transfers', {
   title: 'نقل بين المخازن',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const rows = await api.invoke('transfers:list');
       el.innerHTML = `
-        <div class="toolbar"><button class="btn primary" id="btn-add">+ سند نقل</button></div>
+        <div class="toolbar">${writable ? '<button class="btn primary" id="btn-add">+ سند نقل</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}</div>
         <div id="summary" class="summary-line"></div>
         <div id="table-wrap"></div>`;
-      el.querySelector('#btn-add').onclick = () => form(null);
-      const active = rows.filter(r => r.status !== 'void');
+      if (writable) el.querySelector('#btn-add').onclick = () => form(null);
       el.querySelector('#summary').innerHTML =
-        `عدد السندات: <b>${rows.length}</b> — النشطة: <b>${active.length}</b> — إجمالي حبات النشطة: <b>${fmtNum(active.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
+        `عدد السندات: <b>${rows.length}</b> — إجمالي الحبات المنقولة: <b>${fmtNum(rows.reduce((a, r) => a + (Number(r.total_pieces) || 0), 0), 0)}</b>`;
       renderTable(el.querySelector('#table-wrap'), [
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
@@ -24,17 +27,18 @@ register('transfers', {
         { key: 'to_name', label: 'إلى مخزن' },
         { key: 'items_count', label: 'البنود' },
         { key: 'total_pieces', label: 'الحبات', render: r => fmtNum(r.total_pieces, 0) },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
       ], rows);
-      attachRowMenu(el.querySelector('#table-wrap'), (ri) => {
-        const r = rows[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r.id) },
-          { label: 'طباعة', onClick: () => printDoc(r.id) },
-          { label: 'تعديل', onClick: () => edit(r.id) },
-          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
-        ];
-      });
+      attachRowMenu(el.querySelector('#table-wrap'), (ri) => rowActions({
+        id: rows[ri].id,
+        entity: 'transfers',
+        valueKind: 'pieces',
+        label: 'سند النقل',
+        view: (id) => view(id),
+        print: (id) => printDoc(id),
+        edit: (id) => edit(id),
+        reload: load,
+        readOnly: !writable,
+      }));
     }
 
     async function printDoc(id) {
@@ -68,18 +72,6 @@ register('transfers', {
           'ستُعكس حركة المخزون الحالية ويُعاد تطبيق السند بالكميات الجديدة.',
         ]))) return;
         form(doc);
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('transfers:get', id);
-        if (!(await implicationsDialog('إلغاء سند نقل', [
-          `سيُلغى أثر السند ${esc(doc.doc_number)} وتُعاد الكميات لمخزن المصدر.`,
-        ]))) return;
-        await api.invoke('transfers:void', id, currentUser().id);
-        toast('تم إلغاء السند', 'ok');
-        await load();
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
@@ -189,12 +181,12 @@ register('transfers', {
             const b = row.querySelector('.p-bucket').value;
             const av = bal['qty_' + b] || 0;
             const bl = { salem: 'سليم', talef: 'تالف', muharraz: 'محرز' }[b];
-            balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} حبة`;
+            balText.textContent = `الرصيد ${bl}: ${fmtNum(av, 0)} ${unitOf(item)}`;
           } catch { balText.textContent = ''; }
           const pieces = toPieces(qty.value, unitSel.value, item);
           const kg = piecesToWeightKg(pieces || 0, item?.weight_grams || 0);
           calc.textContent = pieces != null
-            ? `${fmtNum(pieces, 0)} حبة${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`
+            ? `${fmtNum(pieces, 0)} ${unitOf(item)}${kg ? ' — ' + fmtNum(kg) + ' كجم' : ''}`
             : '—';
           updateTotal();
         }

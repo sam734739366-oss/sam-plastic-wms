@@ -1,6 +1,9 @@
 import { register } from '../router.js';
 import { api, currentUser } from '../api.js';
-import { toast, implicationsDialog, renderTable, attachRowMenu, openModal, esc, itemCombo, bucketOptions, bucketBadge } from '../ui.js';
+import {
+  toast, implicationsDialog, renderTable, attachRowMenu, rowActions, openModal, esc,
+  itemCombo, bucketOptions, bucketBadge, canWrite, unitOf,
+} from '../ui.js';
 import { unitOptionsFor, toPieces, piecesToWeightKg } from '../units.js';
 import { fmtMoney, fmtNum, today } from '../fmt.js';
 
@@ -8,21 +11,21 @@ import { fmtMoney, fmtNum, today } from '../fmt.js';
 register('returns', {
   title: 'مرتجعات الشراء',
   async mount(el) {
+    const writable = canWrite();
     async function load() {
       const data = await api.invoke('returns:list');
       const purchases = data.purchases || [];
-      const purchasesActive = purchases.filter(r => r.status !== 'void');
       el.innerHTML = `
         <div class="toolbar">
-          <button class="btn primary" id="btn-purchase">+ مرتجع شراء</button>
+          ${writable ? '<button class="btn primary" id="btn-purchase">+ مرتجع شراء</button>' : '<span class="muted">وضع عرض فقط — لا يمكن الإنشاء أو التعديل أو الحذف</span>'}
         </div>
-        <div class="help-card" style="margin-bottom:12px">مرتجع الشراء: بضاعة تعيدها أنت للمورد — تخرج من المخزون وتنقص ذمتك له، أو يقبض منك نقد إن كانت الفاتورة نقدية. لا يمكن إرجاع كمية أكبر من الكمية الأصلية، ولا إلغاء فاتورة شراء عليها مرتجع نشط — ألغِ المرتجع أولاً.</div>
+        <div class="help-card" style="margin-bottom:12px">مرتجع الشراء: بضاعة تعيدها أنت للمورد — تخرج من المخزون وتنقص ذمتك له، أو يقبض منك نقد إن كانت الفاتورة نقدية. لا يمكن إرجاع كمية أكبر من الكمية الأصلية، ولا حذف فاتورة شراء عليها مرتجع — احذف المرتجع أولاً.</div>
         <h3 class="sec-title">مرتجعات الشراء</h3>
         <div id="sum-purchase" class="summary-line"></div>
         <div id="table-purchase"></div>`;
-      el.querySelector('#btn-purchase').onclick = () => form(null);
+      if (writable) el.querySelector('#btn-purchase').onclick = () => form(null);
       el.querySelector('#sum-purchase').innerHTML =
-        `عدد المرتجعات: <b>${purchases.length}</b> — إجمالي النشطة: <b>${fmtMoney(purchasesActive.reduce((a, r) => a + (Number(r.total) || 0), 0))}</b>`;
+        `عدد المرتجعات: <b>${purchases.length}</b> — الإجمالي: <b>${fmtMoney(purchases.reduce((a, r) => a + (Number(r.total) || 0), 0))}</b>`;
       const cols = [
         { key: 'doc_number', label: 'الرقم', render: r => `<span dir="ltr">${esc(r.doc_number)}</span>` },
         { key: 'doc_date', label: 'التاريخ' },
@@ -30,18 +33,20 @@ register('returns', {
         { key: 'purchase_number', label: 'فاتورة الشراء الأصلية', render: r => `<span dir="ltr">${esc(r.purchase_number || '—')}</span>` },
         { key: 'payment_method', label: 'التسوية', render: r => r.payment_method === 'cash' ? '<span class="tag muharraz">نقد مسترد</span>' : '<span class="tag">آجل</span>' },
         { key: 'total', label: 'الإجمالي', render: r => fmtMoney(r.total) },
-        { key: 'status', label: 'الحالة', render: r => r.status === 'void' ? '<span class="void-badge">ملغى</span>' : '<span class="tag salem">نشط</span>' },
       ];
       renderTable(el.querySelector('#table-purchase'), cols, purchases);
-      attachRowMenu(el.querySelector('#table-purchase'), (ri) => {
-        const r = purchases[ri];
-        return [
-          { label: 'عرض', open: true, onClick: () => view(r.id) },
-          { label: 'طباعة', onClick: () => printDoc(r.id) },
-          { label: 'تعديل', onClick: () => edit(r.id) },
-          { label: 'إلغاء', danger: true, onClick: () => voidDoc(r.id) },
-        ];
-      });
+      attachRowMenu(el.querySelector('#table-purchase'), (ri) => rowActions({
+        id: purchases[ri].id,
+        entity: 'returns',
+        valueKind: 'money',
+        label: 'مرتجع الشراء',
+        payloadOf: (id) => ({ type: 'purchase', id }),
+        view: (id) => view(id),
+        print: (id) => printDoc(id),
+        edit: (id) => edit(id),
+        reload: load,
+        readOnly: !writable,
+      }));
     }
 
     async function printDoc(id) {
@@ -83,24 +88,12 @@ register('returns', {
       } catch (e) { toast(String(e.message || e), 'err'); }
     }
 
-    async function voidDoc(id) {
-      try {
-        const doc = await api.invoke('returns:getPurchase', id);
-        if (!(await implicationsDialog('إلغاء مرتجع', [
-          `سيُعكس أثر المرتجع ${esc(doc.doc_number)}: تُعكس حركة المخزون وتسوية الحساب تلقائياً.`,
-        ]))) return;
-        await api.invoke('returns:void', { type: 'purchase', id }, currentUser().id);
-        toast('تم إلغاء المرتجع', 'ok');
-        await load();
-      } catch (e) { toast(String(e.message || e), 'err'); }
-    }
-
     async function form(doc) {
       const [warehouses, suggest] = await Promise.all([
         api.invoke('warehouses:list'),
         doc ? null : api.invoke('returns:suggest'),
       ]);
-      const sourceList = (await api.invoke('purchases:list')).filter(r => r.status !== 'void');
+      const sourceList = await api.invoke('purchases:list');
       const back = openModal(doc ? `تعديل مرتجع شراء ${esc(doc.doc_number)}` : 'مرتجع شراء جديد', `
         <div class="form-grid">
           <div class="field"><label>رقم المرتجع *</label><input id="f-num" value="${esc(doc ? doc.doc_number : (suggest ? suggest.purchase : ''))}" dir="ltr"></div>
@@ -205,7 +198,7 @@ register('returns', {
           if (opts.some(o => o.value === cur)) unitSel.value = cur;
           else if (data.unit && opts.some(o => o.value === data.unit)) unitSel.value = data.unit;
           if (src.unit_price != null && !price.value) price.value = src.unit_price;
-          leftEl.textContent = `${fmtNum(src.remain, 0)} حبة`;
+          leftEl.textContent = `${fmtNum(src.remain, 0)} ${unitOf(src)}`;
           update();
         }
         function update() {
@@ -215,7 +208,7 @@ register('returns', {
           const kg = piecesToWeightKg(pieces || 0, src?.weight_grams || 0);
           const p = parseFloat(price.value) || 0;
           const q = parseFloat(qty.value) || 0;
-          calc.textContent = `${pieces != null ? fmtNum(pieces, 0) + ' حبة' + (kg ? ' — ' + fmtNum(kg) + ' كجم' : '') : '—'}${p && q ? ' — ' + fmtMoney(p * q) : ''}`;
+          calc.textContent = `${pieces != null ? fmtNum(pieces, 0) + ' ' + unitOf(src) + (kg ? ' — ' + fmtNum(kg) + ' كجم' : '') : '—'}${p && q ? ' — ' + fmtMoney(p * q) : ''}`;
           updateTotal();
         }
         itemSel.onchange = refresh;

@@ -132,7 +132,7 @@ test('سند دفع: يخفض ذمتنا للمورد وينقص النقدية'
   assert.equal(ledger.cashBalance(db), -800);
 });
 
-test('إلغاء فاتورة بيع نقدية يعكس الذمة والنقدية', () => {
+test('حذف فاتورة بيع نقدية يمحو أثر الذمة والنقدية', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales']);
   h['purchases:save'](null, {
@@ -144,10 +144,12 @@ test('إلغاء فاتورة بيع نقدية يعكس الذمة والنقد
     payment_method: 'cash',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 100, unit: 'حبة', unit_price: 50 }]
   }, 1);
-  h['sales:void'](null, id, 1);
+  assert.equal(ledgerRows(db, 'invoice', id).length, 1);
+  h['sales:delete'](null, id, 1);
   assert.equal(ledger.cashBalance(db), 0);
   assert.equal(ledger.partyBalance(db, 2), 0);
-  assert.equal(ledgerRows(db, 'invoice', id).filter(r => r.status === 'active').length, 0);
+  assert.equal(ledgerRows(db, 'invoice', id).length, 0, 'القيد يُمحى مع مستنده لا يُعلَّم');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM invoices WHERE id=?').get(id).c, 0);
 });
 
 test('تعديل فاتورة من آجل إلى نقدي يعيد تسجيل أثر الدفتر', () => {
@@ -170,10 +172,14 @@ test('تعديل فاتورة من آجل إلى نقدي يعيد تسجيل أ
   }, 1);
   assert.equal(ledger.cashBalance(db), 5000);
   assert.equal(ledger.partyBalance(db, 2), 5000);
-  assert.equal(ledgerRows(db, 'invoice', id).filter(r => r.status === 'active').length, 1);
+  // قيد واحد فقط للصافي: التعديل يمح القديمة ويعيد التسجيل مرة واحدة
+  const rows = ledgerRows(db, 'invoice', id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cash_in, 5000);
+  assert.equal(rows[0].amount, 5000);
 });
 
-test('إلغاء سند قبض يعكس أثره على النقدية والذمة', () => {
+test('حذف سند قبض يعكس أثره على النقدية والذمة', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales', 'payments']);
   h['purchases:save'](null, {
@@ -188,9 +194,13 @@ test('إلغاء سند قبض يعكس أثره على النقدية والذ�
   const { id } = h['payments:save'](null, {
     doc_number: 'K-1', doc_date: '2026-10-19', party_id: 2, direction: 'in', amount: 2000
   }, 1);
-  h['payments:void'](null, id, 1);
+  assert.equal(h['payments:impact'](null, id).value, 2000, 'قيمة السند في نافذة التأكيد');
+  assert.equal(h['payments:impact'](null, id).deps.length, 0, 'لا شيء يتفرع إلى سند القبض');
+  h['payments:delete'](null, id, 1);
   assert.equal(ledger.partyBalance(db, 2), 5000);
   assert.equal(ledger.cashBalance(db), 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM payments WHERE id=?').get(id).c, 0);
+  assert.equal(ledgerRows(db, 'payment', id).length, 0, 'القيد مُمحى لا ملغى');
 });
 
 test('ذمم العملاء والموردين في ملخص الحسابات', () => {

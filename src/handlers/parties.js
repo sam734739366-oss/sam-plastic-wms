@@ -30,7 +30,7 @@ module.exports = function register(ipcMain) {
       ['customer_raw_receipts', 'party_id', 'استلام خام للغير'],
       ['customer_deliveries', 'party_id', 'تسليم للغير'],
       ['issue_permits', 'party_id', 'تصاريح صرف'],
-      ['receive_permits', 'party_id', 'تصاريح استلام'],
+      ['production_receipts', 'party_id', 'استلام إنتاج'],
       ['scrap_movements', 'party_id', 'حركات توالف'],
     ];
     for (const [table, col, label] of linked) {

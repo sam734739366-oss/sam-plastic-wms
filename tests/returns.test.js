@@ -148,7 +148,7 @@ test('يمنع إرجاع كمية أكبر من الفاتورة الأصلية
   assert.equal(ledger.partyBalance(db, 2), 0);
 });
 
-test('إلغاء مرتجع بيع يعكس المخزون والذمة والنقدية', () => {
+test('حذف مرتجع بيع يعكس المخزون والذمة والنقدية', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales', 'returns']);
   h['purchases:save'](null, {
@@ -165,14 +165,21 @@ test('إلغاء مرتجع بيع يعكس المخزون والذمة والن
     payment_method: 'cash',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 100, unit: 'حبة', unit_price: 30 }]
   }, 1);
-  h['returns:void'](null, { type: 'sale', id }, 1);
+  const imp = h['returns:impact'](null, { type: 'sale', id });
+  assert.equal(imp.doc_number, 'R-1');
+  assert.equal(imp.value, 3000, 'قيمة المرتجع تُعرض قبل التأكيد');
+  h['returns:delete'](null, { type: 'sale', id }, 1);
   assert.equal(getBalance(db, 1, 1).balance_pieces, 300);
   assert.equal(buckets(db).s, 300);
   assert.equal(ledger.cashBalance(db), 6000);
   assert.equal(ledger.partyBalance(db, 2), 6000);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM sales_returns WHERE id=?').get(id).c, 0, 'الصف يُمحى لا يُلغى');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM sales_return_items WHERE return_id=?').get(id).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM party_ledger WHERE doc_type='sale_return' AND doc_id=?").get(id).c, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='sale_return' AND doc_id=?").get(id).c, 0);
 });
 
-test('يمنع إلغاء فاتورة عليها مرتجع نشط', () => {
+test('يمنع حذف فاتورة عليها مرتجع — حتى يُحذف المرتجع أولاً', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales', 'returns']);
   h['purchases:save'](null, {
@@ -184,12 +191,15 @@ test('يمنع إلغاء فاتورة عليها مرتجع نشط', () => {
     payment_method: 'credit',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 200, unit: 'حبة', unit_price: 30 }]
   }, 1);
-  h['returns:save'](null, {
+  const { id } = h['returns:save'](null, {
     type: 'sale', doc_number: 'R-1', doc_date: '2026-10-19', invoice_id: invId,
     payment_method: 'credit',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 50, unit: 'حبة', unit_price: 30 }]
   }, 1);
-  assert.throws(() => h['sales:void'](null, invId, 1), /مرتجعات/);
+  const err = (() => { try { h['sales:delete'](null, invId, 1); return null; } catch (e) { return e; } })();
+  assert.ok(err && /مرتجع بيع R-1/.test(err.message), 'الرسالة تذكر المرتجع برقمه');
+  h['returns:delete'](null, { type: 'sale', id }, 1);
+  assert.equal(h['sales:delete'](null, invId, 1).ok, true, 'وبعد حذف المرتجع يُسمح');
 });
 
 test('تعديل مرتجع: يعكس القديم ويطبق الجديد بدقة', () => {

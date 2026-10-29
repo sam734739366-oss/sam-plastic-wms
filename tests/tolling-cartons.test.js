@@ -93,16 +93,33 @@ test('تعديل سند الخام يعيد توليد الكراتين، ويُ
   h['issues:save'](null, { doc_number: 'I-1', doc_date: '2026-10-19', source: 'customer', party_id: 1,
     items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: ['C-1'] }] }, 1);
   assert.throws(() => h['tolling:receiptSave'](null, { id: doc.id, doc_number: 'R-1', doc_date: '2026-10-18',
-    party_id: 1, items: [{ item_id: 1, quantity: 5000, unit: 'عبوة' }] }, 1), /كراتين مصروفة للإنتاج/);
+    party_id: 1, items: [{ item_id: 1, quantity: 5000, unit: 'عبوة' }] }, 1), /كراتين صُرفت للإنتاج/);
+  assert.deepEqual(h['tolling:receiptImpact'](null, doc.id).deps.map((x) => x.number), ['C-1'],
+    'النافذة تعرض الكرتون المانع قبل التأكيد');
+  // لا تعديل ولا حذف ما دامت السلسلة قائمة
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM cartons').get().c, 3);
 });
 
-test('إلغاء سند الخام يحذف كراتينه غير المصروفة ويمنع إلغاء المصروفة', () => {
+test('حذف سند الخام يحذف كراتينه غير المصروفة ويمنع حذف المصروفة', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
   const doc = receive(h, 1, 'R-1', [{ item_id: 1, quantity: 10000, unit: 'عبوة' }]);
-  h['tolling:receiptVoid'](null, doc.id, 1);
+  const { id: issId } = h['issues:save'](null, { doc_number: 'I-1', doc_date: '2026-10-19',
+    source: 'customer', party_id: 1,
+    items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: ['C-1'] }] }, 1);
+  const err = (() => { try { h['tolling:receiptDelete'](null, doc.id, 1); return null; } catch (e) { return e; } })();
+  assert.ok(err && /C-1/.test(err.message) && /احذف الأحدث/.test(err.message), err && err.message);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM cartons').get().c, 2, 'لا كراتين حُذفت بالمنع');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_raw_receipts WHERE id=?').get(doc.id).c, 1);
+  // بعد حذف التصريح ترجع الكراتتان وتُمحى مع السند محواً فعلياً لا تعليماً
+  h['issues:delete'](null, issId, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM cartons WHERE status='in_stock'").get().c, 2);
+  const res = h['tolling:receiptDelete'](null, doc.id, 1);
+  assert.equal(res.ok, true);
   assert.equal(db.prepare('SELECT COUNT(*) c FROM cartons').get().c, 0);
-  assert.equal(db.prepare('SELECT status FROM customer_raw_receipts WHERE id=?').get(doc.id).status, 'void');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_raw_receipts WHERE id=?').get(doc.id).c, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM customer_raw_items WHERE receipt_id=?').get(doc.id).c, 0);
+  assert.equal(remaining(h, 'عميل أ'), 0, 'خارج رصيد العميل محوٌ لا إلغاء');
 });
 
 // ---------------------------------------------------------------- [B] عزل المصادر
@@ -159,109 +176,140 @@ test('صرف كراتين العميل لا يحرّك مخزون المصنع �
 
 // -------------------------------------------------- [C]+[D] توجيه التالف لرصيد العميل
 
+// يستلم خام عميل (كراتين C-) ويصرّف كرتوناً منه للإنتاج، فيعود السند والتصريح والكرتون
 function issueCustomerCarton(h, db, carton = 'C-1') {
-  receive(h, 1, 'R-1', [{ item_id: 1, quantity: 12000, unit: 'عبوة' }]);
-  h['issues:save'](null, { doc_number: 'I-1', doc_date: '2026-10-19', source: 'customer', party_id: 1,
+  const rec = receive(h, 1, 'R-1', [{ item_id: 1, quantity: 12000, unit: 'عبوة' }]);
+  const { id: issId } = h['issues:save'](null, { doc_number: 'I-1', doc_date: '2026-10-19',
+    source: 'customer', party_id: 1,
     items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: [carton] }] }, 1);
-  return db.prepare('SELECT id, pieces FROM cartons WHERE carton_number=?').get(carton);
+  const row = db.prepare('SELECT id, pieces FROM cartons WHERE carton_number=?').get(carton);
+  return { recId: rec.id, issId, carton: row };
 }
 
-const defectDoc = (db, cartonId) => db.prepare(
-  "SELECT * FROM scrap_movements WHERE prod_carton_id=?").get(cartonId);
+// سند استلام الإنتاج الموحّد: الكراتين بنتائجها والأكياس على رأسه
+function receiptDoc(h, over = {}) {
+  return h['production:save'](null, {
+    doc_number: over.doc_number || 'PR-1', doc_date: '2026-10-20', fg_item_id: 1, warehouse_id: 1, ...over,
+  }, 1);
+}
+
+// سند التالف الآلي تابع للسند كلّه لا للكرتون
+const defectDoc = (db, receiptId) => db.prepare(
+  'SELECT * FROM scrap_movements WHERE prod_receipt_id=?').get(receiptId);
 
 test('تالف الإنتاج بخام العميل يخصم من رصيد العميل ولا يمس تالف المصنع', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
-  const carton = issueCustomerCarton(h, db);
+  const { issId, carton } = issueCustomerCarton(h, db);
   const balBefore = remaining(h, 'عميل أ');
 
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-20',
-    good_pieces: 4500, defect_before: 300, defect_after: 200 }, 1);
+  const r = receiptDoc(h, { issue_permit_id: issId, cartons:
+    [{ carton_id: carton.id, good_pieces: 4500, defect_before_pieces: 300, defect_after_pieces: 200 }] });
 
   assert.equal(talef(db), 0, 'سلّة تالف المصنع يجب أن تبقى صفرًا');
+  assert.equal(db.prepare('SELECT qty_salem FROM items WHERE id=1').get().qty_salem, 0, 'ولا سليمه');
   assert.equal(db.prepare("SELECT COUNT(*) c FROM stock_moves WHERE doc_type='production'").get().c, 0);
-  const sc = defectDoc(db, carton.id);
+  const sc = defectDoc(db, r.id);
   assert.equal(sc.is_customer, 1);
   assert.equal(sc.party_id, 1);
-  assert.equal(sc.pieces, 500);
+  assert.equal(sc.pieces, 500, 'التالف قبل + بعد كله على العميل');
   assert.equal(sc.disposition, 'production_defect');
   assert.equal(sc.warehouse_id, null);
   assert.equal(sc.talef_take, 0);
+  assert.equal(sc.salem_take, 0);
+  assert.equal(sc.doc_number, 'تالف إنتاج PR-1');
   assert.equal(remaining(h, 'عميل أ'), balBefore - 500);
   assert.equal(remaining(h, 'عميل ب'), 0, 'عميل آخر لا يتأثر');
+  // رصيد العميل = خام − تسليم − تالف، والدورة كلها بلا حركة مخزون
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM stock_moves').get().c, 0);
 });
 
-test('تعديل النتيجة يحدّث السند نفسه ولا ينشئ مستنداً مكرراً', () => {
+test('تعديل السند يحدّث سند التالف نفسه ولا ينشئ مستنداً مكرراً', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
-  const carton = issueCustomerCarton(h, db);
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-20', good_pieces: 4500, defect_before: 500 }, 1);
-  const firstId = defectDoc(db, carton.id).id;
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-21', good_pieces: 4700, defect_before: 300 }, 1);
+  const { issId, carton } = issueCustomerCarton(h, db);
+  const r = receiptDoc(h, { issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 4500, defect_before_pieces: 500, defect_after_pieces: 0 }] });
+  const firstId = defectDoc(db, r.id).id;
+  receiptDoc(h, { id: r.id, issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 4700, defect_before_pieces: 300, defect_after_pieces: 0 }] });
   const rows = db.prepare('SELECT * FROM scrap_movements').all();
-  assert.equal(rows.length, 1, 'مستند واحد لكل كرتون');
-  assert.equal(defectDoc(db, carton.id).id, firstId);
-  assert.equal(defectDoc(db, carton.id).pieces, 300);
+  assert.equal(rows.length, 1, 'مستند واحد للسند لا لكل تعديل');
+  assert.equal(defectDoc(db, r.id).id, firstId, 'يُحدَّث في نفس الصف');
+  assert.equal(defectDoc(db, r.id).pieces, 300);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM production_receipts').get().c, 1);
   assert.equal(remaining(h, 'عميل أ'), 12000 - 300);
 });
 
-test('تصفير التالف يُلغي السند فيعود رصيد العميل، ثم يُعاد تنشيطه بالزيادة', () => {
+test('تصفير التالف يمحو السند فيعيد رصيد العميل، ثم يُنشأ من جديد بالزيادة', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
-  const carton = issueCustomerCarton(h, db);
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-20', good_pieces: 4500, defect_after: 500 }, 1);
+  const { issId, carton } = issueCustomerCarton(h, db);
+  const r = receiptDoc(h, { issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 4500, defect_before_pieces: 0, defect_after_pieces: 500 }] });
   assert.equal(remaining(h, 'عميل أ'), 11500);
 
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-20', good_pieces: 5000 }, 1);
-  assert.equal(defectDoc(db, carton.id).status, 'void');
+  receiptDoc(h, { id: r.id, issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 5000, defect_before_pieces: 0, defect_after_pieces: 0 }] });
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements').get().c, 0, 'بلا تالف ⇒ بلا سند');
   assert.equal(remaining(h, 'عميل أ'), 12000, 'التالف صفر ⇒ الخصم صفر');
 
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-21', good_pieces: 4800, defect_after: 200 }, 1);
-  const sc = defectDoc(db, carton.id);
-  assert.equal(sc.status, 'active', 'سند ملغى سابقاً يجب أن يعود نشطاً وإلا ضاع التالف');
-  assert.equal(sc.pieces, 200);
+  receiptDoc(h, { id: r.id, issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 4800, defect_before_pieces: 0, defect_after_pieces: 200 }] });
+  const sc = defectDoc(db, r.id);
+  assert.equal(sc.pieces, 200, 'يُنشأ سند جديد بحباته الحالية لا يُضاف على القديم');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements').get().c, 1, 'ولا يتضاعف التالف');
   assert.equal(remaining(h, 'عميل أ'), 11800);
 });
 
-test('حذف النتيجة يُلغي سند تالف العميل ويعيد رصيده', () => {
+test('حذف السند يمحى سند تالف العميل ويعيد رصيده كاملاً', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
-  const carton = issueCustomerCarton(h, db);
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-20', good_pieces: 4500, defect_before: 500 }, 1);
+  const { issId, carton } = issueCustomerCarton(h, db);
+  const r = receiptDoc(h, { issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 4500, defect_before_pieces: 500, defect_after_pieces: 0 }] });
   assert.equal(remaining(h, 'عميل أ'), 11500);
-  h['production:delete'](null, carton.id, 1);
-  assert.equal(defectDoc(db, carton.id).status, 'void');
+  const res = h['production:delete'](null, r.id, 1);
+  assert.equal(res.ok, true);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements').get().c, 0, 'السند يُمحى مع الاستلام');
   assert.equal(remaining(h, 'عميل أ'), 12000);
   assert.equal(talef(db), 0);
+  assert.equal(db.prepare('SELECT status FROM cartons WHERE id=?').get(carton.id).status, 'issued');
 });
 
-test('عدد المستند المُولّد لا يتصادم مع مستند تالف يدوي بنفس الاسم', () => {
+test('ترقيم السند المُولّد لا يتصادم مع مستند تالف يدوي بنفس الاسم', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
-  const carton = issueCustomerCarton(h, db);
-  // مستند يدوي يشغل الاسم الذي كان التوليد القديم سيستخدمه (تالف عميل بلا فحص رصيد)
-  h['scrap:save'](null, { doc_number: 'تالف إنتاج C-1', doc_date: '2026-10-19', item_id: 1,
+  const { issId, carton } = issueCustomerCarton(h, db);
+  // سند يدوي يشغل الاسم الذي سيولّده الاستلام PR-1
+  h['scrap:save'](null, { doc_number: 'تالف إنتاج PR-1', doc_date: '2026-10-19', item_id: 1,
     disposition: 'sold_scrap', party_id: 1, pieces: 10, weight_kg: 0.25 }, 1);
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-20', good_pieces: 4500, defect_before: 500 }, 1);
-  const sc = defectDoc(db, carton.id);
-  assert.equal(sc.doc_number, 'تالف إنتاج C-1-2');
-  assert.equal(db.prepare("SELECT pieces FROM scrap_movements WHERE doc_number='تالف إنتاج C-1'").get().pieces, 10,
+  const r = receiptDoc(h, { issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 4500, defect_before_pieces: 500, defect_after_pieces: 0 }] });
+  const sc = defectDoc(db, r.id);
+  assert.equal(sc.doc_number, 'تالف إنتاج PR-1-2', 'الحاء التصادم بإضافة لاحقة');
+  assert.equal(db.prepare("SELECT pieces FROM scrap_movements WHERE doc_number='تالف إنتاج PR-1'").get().pieces, 10,
     'المستند اليدوي لم يُمس');
+  assert.equal(remaining(h, 'عميل أ'), 12000 - 10 - 500, 'وكلاهما يخصم رصيده');
 });
 
-test('سندات التالف الآلية محمية من التعديل والإلغاء اليدوي', () => {
+test('سندات التالف الآلية محمية من التعديل والحذف اليدوي', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc();
-  const carton = issueCustomerCarton(h, db);
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-20', good_pieces: 4500, defect_before: 500 }, 1);
-  const sc = defectDoc(db, carton.id);
+  const { issId, carton } = issueCustomerCarton(h, db);
+  const r = receiptDoc(h, { issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 4500, defect_before_pieces: 500, defect_after_pieces: 0 }] });
+  const sc = defectDoc(db, r.id);
   assert.throws(() => h['scrap:save'](null, { id: sc.id, doc_number: 'X', doc_date: '2026-10-20', item_id: 1,
     disposition: 'sold_scrap', warehouse_id: 1, pieces: 99, weight_kg: 1 }, 1), /آلي/);
-  assert.throws(() => h['scrap:void'](null, sc.id, 1), /آلي/);
+  const err = (() => { try { h['scrap:delete'](null, sc.id, 1); return null; } catch (e) { return e; } })();
+  assert.ok(err && /آلي/.test(err.message) && /PR-1/.test(err.message), err && err.message,
+    'الرسالة تذكر رقم الاستلام الذي أنشأه');
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements WHERE id=?').get(sc.id).c, 1, 'السند باقٍ');
+  // ولا يُحذف إلا بحذف الاستلام صاحبهِ
+  h['production:delete'](null, r.id, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements WHERE id=?').get(sc.id).c, 0);
 });
-
-// ---------------------------------------------------------------- ترقية قاعدة قديمة
-// انظر tests/migration.test.js: ترقية قاعدة قديمة إلى كراتين العميل وقيد المصير الجديد
 
 // ---------------------------------------------------------- عدم الانحراف عن خام المصنع
 
@@ -270,16 +318,21 @@ test('تالف خام المصنع ما زال يزيد سلّة التالف و
   const h = stubIpc();
   h['purchases:save'](null, { doc_number: 'P-1', doc_date: '2026-10-18',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_prefix: 'K-' }] }, 1);
-  h['issues:save'](null, { doc_number: 'I-1', doc_date: '2026-10-19', source: 'own',
+  const { id: issId } = h['issues:save'](null, { doc_number: 'I-1', doc_date: '2026-10-19', source: 'own',
     items: [{ item_id: 1, warehouse_id: 1, quantity: 1, unit: 'كرتون', carton_ids: ['K-1'] }] }, 1);
   const carton = db.prepare("SELECT id FROM cartons WHERE carton_number='K-1'").get();
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-20', good_pieces: 4500, defect_before: 500 }, 1);
+  assert.equal(db.prepare('SELECT qty_salem FROM items WHERE id=1').get().qty_salem, 0, 'الخام خرج كله بالصرف');
+  const r = receiptDoc(h, { issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 4500, defect_before_pieces: 500, defect_after_pieces: 0 }] });
   assert.equal(talef(db), 500);
-  assert.equal(db.prepare("SELECT COUNT(*) c FROM scrap_movements").get().c, 0);
-  const mv = db.prepare("SELECT qty_in_pieces, bucket FROM stock_moves WHERE doc_type='production'").get();
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM scrap_movements').get().c, 0, 'لا سند آلي لخام المصنع');
+  const mv = db.prepare("SELECT qty_in_pieces, bucket FROM stock_moves WHERE doc_type='production' AND bucket='talef'").get();
   assert.equal(mv.qty_in_pieces, 500);
   assert.equal(mv.bucket, 'talef');
+  assert.equal(db.prepare("SELECT qty_in_pieces q FROM stock_moves WHERE doc_type='production' AND bucket='salem'").get().q, 4500);
   // تعديل ثم تصفير يعكس السلّة بدقة
-  h['production:save'](null, { carton_id: carton.id, result_date: '2026-10-21', good_pieces: 5000 }, 1);
-  assert.equal(talef(db), 0);
+  receiptDoc(h, { id: r.id, issue_permit_id: issId,
+    cartons: [{ carton_id: carton.id, good_pieces: 5000, defect_before_pieces: 0, defect_after_pieces: 0 }] });
+  assert.equal(talef(db), 0, 'التالف انعكس كله');
+  assert.equal(db.prepare('SELECT qty_salem FROM items WHERE id=1').get().qty_salem, 5000);
 });
