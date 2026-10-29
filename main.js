@@ -1,41 +1,8 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const templates = require('./src/print/templates');
 const backup = require('./src/backup');
-
-// التحديث التلقائي من GitHub Releases عبر electron-updater.
-// يعمل في النسخة المثبّتة فقط، وكل فشل يُسجَّل بلا أن يعطّل الإقلاع أو يمسّ البيانات.
-// ملاحظة أمان مفيدة: quitAndInstall يُطلق before-quit، فتنشأ نسخة احتياطية قبل التحديث.
-function initAutoUpdater() {
-  if (!app.isPackaged) return;
-  let autoUpdater;
-  try {
-    ({ autoUpdater } = require('electron-updater'));
-  } catch {
-    return; // الحزمة غير متوفرة: التطبيق يعمل بلا تحديث تلقائي
-  }
-  autoUpdater.autoDownload = false;            // لا تنزيل بلا إذن المستخدم
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on('error', (err) => console.warn('[updater]', err && err.message ? err.message : err));
-  autoUpdater.on('update-available', (info) => {
-    dialog.showMessageBox({
-      type: 'info',
-      title: 'تحديث سام بلاستيك',
-      message: `يوجد إصدار جديد (${info.version}). الإصدار الحالي ${app.getVersion()}.`,
-      detail: 'سيُنشأ نسخة احتياطية من البيانات تلقائياً قبل تثبيت التحديث.',
-      buttons: ['تنزيل وتحديث', 'لاحقاً'],
-      defaultId: 0, cancelId: 1,
-    }).then(({ response }) => {
-      if (response === 0) autoUpdater.downloadUpdate().catch((e) => console.warn('[updater] download', e && e.message));
-    }).catch(() => {});
-  });
-  autoUpdater.on('update-downloaded', () => {
-    dialog.showMessageBox({ type: 'info', title: 'التحديث جاهز', message: 'سيُعاد تشغيل البرنامج لإتمام التثبيت.', buttons: ['إعادة التشغيل الآن'] })
-      .then(() => autoUpdater.quitAndInstall(false, true))
-      .catch(() => {});
-  });
-  setTimeout(() => { autoUpdater.checkForUpdates().catch(() => {}); }, 4000);
-}
+const updater = require('./src/updater');
 
 function createMainWindow() {
   const win = new BrowserWindow({
@@ -92,11 +59,15 @@ ipcMain.handle('print:open', (e, payload) => {
   return { ok: true };
 });
 
+// واجهة التحقق من التحديثات للأيقونة في الشريط الجانبي
+ipcMain.handle('app:checkUpdate', () => updater.checkNow());
+ipcMain.handle('app:status', () => updater.status());
+
 app.whenReady().then(() => {
   require('./src/db').getDb();
   require('./src/ipc')(ipcMain);
   const mainWin = createMainWindow();
-  initAutoUpdater();
+  updater.initAutoUpdater();
   setInterval(() => { try { backup.createBackup(); } catch { /* ignore */ } }, 24 * 60 * 60 * 1000);
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createMainWindow(); });
 });

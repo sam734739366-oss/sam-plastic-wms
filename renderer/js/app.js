@@ -2,7 +2,7 @@ import { currentUser } from './api.js';
 import { go, currentScreen } from './router.js';
 import { initWM } from './wm.js';
 import { setCurrency } from './fmt.js';
-import { explainDialog } from './ui.js';
+import { explainDialog, toast } from './ui.js';
 import { helpFor } from './help.js';
 
 // ===== تحسين خانات التاريخ =====
@@ -41,6 +41,47 @@ const roleLabel = {
 };
 document.getElementById('current-user').textContent = `${u.full_name} (${roleLabel[u.role] || u.role})`;
 document.getElementById('logout').onclick = () => { sessionStorage.clear(); location.href = 'index.html'; };
+
+// ===== أيقونة التحقق من التحديثات =====
+// الفحص اليدوي يفيد المستخدم أن يعرف حالته بلا انتظار الإقلاع التالي، ويُبيّن بوضوح
+// أن النسخة التي تعمل من المصدر لا تفحص التحديثات إطلاقاً.
+const updBtn = document.getElementById('check-update');
+const updLabel = document.getElementById('update-label');
+
+function setUpdState(r) {
+  const label = { available: 'يوجد تحديث', downloaded: 'جاهز للتثبيت', current: 'أحدث إصدار', dev: 'تحديثات' }[r.state] || 'تحديثات';
+  updLabel.textContent = label;
+  updBtn.classList.toggle('updatable', r.state === 'available' || r.state === 'downloaded');
+}
+
+async function loadUpdateStatus() {
+  try {
+    const st = await window.api.invoke('app:status');
+    updBtn.title = `الإصدار ${st.version}${st.packaged ? '' : ' — يعمل من المصدر: لا فحص تحديثات'}`;
+    if (st.packaged && st.lastCheck) setUpdState(st.lastCheck);
+  } catch { /* الشريط يعمل بلا معلومات إصدار */ }
+}
+
+updBtn.onclick = async () => {
+  updBtn.disabled = true;
+  updBtn.classList.add('busy');
+  updLabel.textContent = 'فحص…';
+  try {
+    const r = await window.api.invoke('app:checkUpdate');
+    setUpdState(r);
+    if (r.state === 'available') toast(`يوجد إصدار جديد: ${r.remote || ''} — سيُطلب منك التنزيل`, 'ok');
+    else if (r.state === 'downloaded') toast(`اكتمل تنزيل الإصدار ${r.remote || ''} — أعد التشغيل للتثبيت`, 'ok');
+    else if (!r.ok) toast(r.message || 'تعذّر التحقق من التحديثات', 'err');
+    else toast(r.message || 'أنت على أحدث إصدار', 'ok');
+  } catch (e) {
+    updLabel.textContent = 'تحديثات';
+    toast(String(e.message || e), 'err');
+  } finally {
+    updBtn.classList.remove('busy');
+    updBtn.disabled = false;
+  }
+};
+loadUpdateStatus();
 
 // الشاشات المتاحة لكل دور — null تعني كل الشاشات (المدير)
 const ROLE_SCREENS = {

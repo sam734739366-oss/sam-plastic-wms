@@ -81,3 +81,12 @@ form.addEventListener('submit', async (ev) => {
     delete btn.dataset.busy;
   }
 });
+
+// رقم الإصدار الحقيقي من التطبيق نفسه — لا يُكتب يدوياً فيبقى صادقاً بعد كل بناء
+(async () => {
+  try {
+    const st = await window.api.invoke('app:status');
+    const el = document.querySelector('.login-version');
+    if (el && st && st.version) el.textContent = `سام بلاستيك — الإصدار ${st.version}`;
+  } catch { /* تبقى العبارة العامة */ }
+})();

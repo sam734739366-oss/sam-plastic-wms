@@ -284,6 +284,13 @@ body {
 }
 .sidebar-footer .btn { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .16); color: #e2eaf7; }
 .sidebar-footer .btn:hover { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .3); }
+/* أيقونة التحقق من التحديثات في الشريط الجانبي */
+.sidebar-footer .sf-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.sidebar-footer #check-update svg { width: 13px; height: 13px; margin-inline-end: 5px; vertical-align: -2px; }
+.sidebar-footer #check-update.busy svg { animation: sf-spin 1s linear infinite; }
+.sidebar-footer #check-update.updatable { background: rgba(217, 164, 65, .22); border-color: var(--gold); color: #fdf3d8; }
+@keyframes sf-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sidebar-footer #check-update.busy svg { animation: none; } }
 /* ===== سطح المكتب والنوافذ ===== */
 .desktop {
   flex: 1; min-width: 0; position: relative; overflow: hidden;
