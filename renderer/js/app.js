@@ -48,14 +48,22 @@ document.getElementById('logout').onclick = () => { sessionStorage.clear(); loca
 const updBtn = document.getElementById('check-update');
 const updLabel = document.getElementById('update-label');
 
+// أثناء التنزيل نسبة مئوية وحدها تُظهر «0%» دقائق طويلة والملف يكبر فعلاً،
+// فنعرض الميجابايت إن توفّرت لأنها تُثبت للمستخدم أن شيئاً يحدث.
+function downloadLabel(r) {
+  if (r && r.total_mb) return `تنزيل ${r.received_mb || 0}/${r.total_mb} م.ب`;
+  if (r && r.progress != null) return `تنزيل ${r.progress}%`;
+  return 'تنزيل…';
+}
+
 function setUpdState(r) {
-  const pct = r && r.progress != null && r.state === 'downloading' ? ` ${r.progress}%` : '';
   const label = {
-    available: 'يوجد تحديث', downloading: 'تنزيل' + pct, downloaded: 'جاهز للتثبيت',
+    available: 'يوجد تحديث', downloading: downloadLabel(r), downloaded: 'جاهز للتثبيت',
     current: 'أحدث إصدار', dev: 'تحديثات', error: 'فشل الفحص', timeout: 'انقطع الفحص',
+    stalled: 'انقطع التنزيل',
   }[r && r.state] || 'تحديثات';
   updLabel.textContent = label;
-  updBtn.classList.toggle('updatable', !!r && (r.state === 'available' || r.state === 'downloaded'));
+  updBtn.classList.toggle('updatable', !!r && (r.state === 'available' || r.state === 'downloaded' || r.state === 'stalled'));
 }
 
 // electron-updater لا يعرض شريط تقدّم بنفسه، فيبدو التطبيق صامتًا دقائق بعد الموافقة.
@@ -69,9 +77,13 @@ function watchDownload() {
     try {
       const st = await window.api.invoke('app:status');
       const c = st.lastCheck;
-      if (st.downloading || (c && c.state === 'downloading')) { setUpdState({ state: 'downloading', progress: c && c.progress }); return; }
+      if (st.downloading || (c && c.state === 'downloading')) { setUpdState({ ...c, state: 'downloading' }); return; }
       if (c && c.state === 'downloaded') { setUpdState(c); toast('اكتمل التنزيل — ستظهر نافذة إعادة التشغيل', 'ok'); }
       else if (c && c.state === 'available') { setUpdState(c); return; }
+      else if (c && (c.state === 'stalled' || c.state === 'error')) {
+        setUpdState(c);
+        toast(c.message || 'تعذّر إكمال التنزيل — يمكنك المحاولة مجدداً أو تنزيل الإصدار من المتصفح', 'err');
+      }
       else setUpdState(c || { state: 'current' });
       clearInterval(watchTimer); watchTimer = null;
     } catch {

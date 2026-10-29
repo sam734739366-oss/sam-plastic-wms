@@ -3,11 +3,28 @@
 const { app, dialog } = require('electron');
 
 const CHECK_TIMEOUT_MS = 45000;
+// electron-updater لا يعرض شريط تقدّم ولا يُعلن انقطاعاً: إن مات التدفق يبقى الملف الجزئي
+// في مجلد pending بلا نهاية. دقيقة كاملة بلا حدث تقدّم تعني أن التنزيل توقّف.
+// المهل قابلة للضبط من المتغيرات البيئية حتى تختبرها الحزمة في أجزاء الثانية.
+const DOWNLOAD_STALL_MS = num(process.env.SAM_UPDATE_STALL_MS) || 60000;
+const STALL_TICK_MS = num(process.env.SAM_UPDATE_TICK_MS) || 5000;
+const RELEASES_URL = 'https://github.com/sam734739366-oss/sam-plastic-wms/releases/latest';
+const MB = 1024 * 1024;
+
+// أرقام آمنة: أي قيمة غائبة أو غير رقمية تصبح صفراً بدل NaN يظهر في الواجهة أو يوقف التنزيل
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function mb(bytes) { return Math.round(num(bytes) / MB * 10) / 10; }
 
 let cached = null;      // autoUpdater — أو false إن لم تكن الحزمة متوفرة
 let lastCheck = null;   // آخر نتيجة، تُعرض في الواجهة بلا إعادة فحص
 let manualBusy = false; // قمع نافذة الفحص التلقائي أثناء فحص يدوي حتى لا تظهر رسالتان
 let downloading = false; // تنزيل جارٍ الآن — يمنع بدء فحص ثانٍ فوقه
+let lastProgressAt = 0;  // زمن آخر حدث download-progress — أساس كشف الانقطاع
+let stallTimer = null;   // مراقب الانقطاع، يعمل فقط أثناء التنزيل
+// كل انقطاع يُفتح له نافذة إعادة محاولة، فلا يجوز أن تتوالى النوافذ بلا نهاية على
+// خط بطيء ينقطع كل دقيقة — محاولات تلقائية محدودة وبعدها يُعرض رابط المتصفح.
+const MAX_STALL_RETRIES = 2;
+let stallRetries = 0;
 
 function updater() {
   if (cached !== null) return cached;
@@ -32,7 +49,9 @@ function wire(a) {
   a.on('error', (err) => {
     const message = String((err && err.message) || err || 'خطأ غير معروف');
     console.warn('[updater]', message);
-    snap('error', message);
+    stopStallWatch();
+    downloading = false;
+    snap('error', message, lastCheck && lastCheck.remote);
   });
   a.on('update-available', (info) => {
     snap('available', null, info && info.version);
@@ -41,14 +60,81 @@ function wire(a) {
   a.on('update-not-available', () => snap('current'));
   a.on('download-progress', (p) => {
     downloading = true;
-    const base = lastCheck || snap('downloading');
-    lastCheck = { ...base, state: 'downloading', progress: Math.round(num(p && p.percent) || 0) };
+    lastProgressAt = Date.now();
+    const received = num(p && p.transferred);
+    const total = num(p && p.total);
+    // النسبة وحدها تُعرض «0%» في أول دقائق التنزيل فتوحي بالتجمّد؛ الميجابايت أدقّ وأصدق.
+    lastCheck = { ...(lastCheck || {}), at: new Date().toISOString(), state: 'downloading',
+      local: app.getVersion(), remote: (lastCheck && lastCheck.remote) || null,
+      progress: Math.round(num(p && p.percent)), received_mb: mb(received), total_mb: mb(total),
+      speed_mb: mb(p && p.bytesPerSecond) };
+    startStallWatch(a);
   });
   a.on('update-downloaded', (info) => {
     downloading = false;
+    stallRetries = 0;
+    stopStallWatch();
     snap('downloaded', null, info && info.version);
     if (!manualBusy) promptInstall();
   });
+}
+
+// ===== مراقبة انقطاع التنزيل =====
+function startStallWatch(a) {
+  if (stallTimer) return;
+  stallTimer = setInterval(() => {
+    if (!downloading) { stopStallWatch(); return; }
+    if (Date.now() - lastProgressAt < DOWNLOAD_STALL_MS) return;
+    onStalled(a);
+  }, STALL_TICK_MS);
+  if (stallTimer.unref) stallTimer.unref(); // لا يُبقي العملية حيّة في الاختبارات ولا يؤخر الإقلاع
+}
+
+function stopStallWatch() {
+  if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+}
+
+function onStalled(a) {
+  stopStallWatch();
+  downloading = false;
+  const got = (lastCheck && lastCheck.received_mb) || 0;
+  const tot = (lastCheck && lastCheck.total_mb) || 0;
+  const hint = stallRetries >= MAX_STALL_RETRIES
+    ? `نُزِّل ${got} م.ب من ${tot} م.ب ثم انقطع مرتين. نزّل الإصدار من المتصفح:\n${RELEASES_URL}`
+    : `نُزِّل ${got} م.ب من ${tot} م.ب. جرّب «إعادة المحاولة»، وإن تكرر الانقطاع نزّل الإصدار من المتصفح:\n${RELEASES_URL}`;
+  snap('stalled', `توقف التنزيل عند ${got} من ${tot} م.ب — انقطاع الاتصال غالباً.`, lastCheck && lastCheck.remote);
+  if (stallRetries >= MAX_STALL_RETRIES) return;  // بلا نوافذ متوالية على خط ينقطع كل دقيقة
+  stallRetries++;
+  dialog.showMessageBox({
+    type: 'warning',
+    title: 'انقطاع تنزيل التحديث',
+    message: 'توقف تنزيل التحديث ولم تصل أي بيانات خلال آخر دقيقة.',
+    detail: hint,
+    buttons: ['إعادة المحاولة', 'لاحقاً'],
+    defaultId: 0, cancelId: 1,
+  }).then(({ response }) => {
+    if (response === 0) startDownload(a);
+  }).catch(() => {});
+}
+
+// التنزيل في مكان واحد: يرفع علم «جارٍ» قبل البدء حتى تُقرأ الحالة صحيحاً من الواجهة،
+// ويحوّل رفض electron-updater إلى رسالة مفهومة بدل أن تختفي في console.
+function startDownload(a) {
+  if (!a) return;
+  downloading = true;
+  lastProgressAt = Date.now();
+  startStallWatch(a);
+  snap('downloading', null, (lastCheck && lastCheck.remote) || null);
+  Promise.resolve()
+    .then(() => a.downloadUpdate())
+    .then(() => { stopStallWatch(); })
+    .catch((e) => {
+      stopStallWatch();
+      downloading = false;
+      const message = `فشل تنزيل التحديث: ${String((e && e.message) || e || 'خطأ غير معروف')}`;
+      console.warn('[updater]', message);
+      snap('error', message, (lastCheck && lastCheck.remote) || null);
+    });
 }
 
 function promptDownload(info) {
@@ -60,10 +146,7 @@ function promptDownload(info) {
     buttons: ['تنزيل وتحديث', 'لاحقاً'],
     defaultId: 0, cancelId: 1,
   }).then(({ response }) => {
-    if (response === 0) {
-      const a = updater();
-      if (a) a.downloadUpdate().catch((e) => console.warn('[updater] download', e && e.message));
-    }
+    if (response === 0) startDownload(updater());
   }).catch(() => {});
 }
 
@@ -96,15 +179,19 @@ async function checkNow() {
   if (!a) return { ok: false, state: 'unavailable', local: app.getVersion(), remote: null,
     message: 'حزمة electron-updater غير متوفرة في هذه النسخة.' };
   if (downloading) {
-    const pct = lastCheck && lastCheck.progress != null ? lastCheck.progress : 0;
-    return { ok: true, state: 'downloading', local: app.getVersion(), remote: (lastCheck && lastCheck.remote) || null,
-      progress: pct, message: `التنزيل جارٍ (${pct}%) — يكتمل الطلب تلقائياً عند النهاية.` };
+    const c = lastCheck || {};
+    const pct = c.progress != null ? c.progress : 0;
+    const detail = c.total_mb ? `${c.received_mb || 0} من ${c.total_mb} م.ب` : `${pct}%`;
+    return { ok: true, state: 'downloading', local: app.getVersion(), remote: c.remote || null,
+      progress: pct, received_mb: c.received_mb || 0, total_mb: c.total_mb || 0,
+      message: `التنزيل جارٍ (${detail}) — يكتمل الطلب تلقائياً عند النهاية.` };
   }
   if (lastCheck && lastCheck.state === 'downloaded') {
     return { ok: true, ...lastCheck, message: `التنزيل اكتمل (إصدار ${lastCheck.remote}) — أعد التشغيل للتثبيت.` };
   }
 
   manualBusy = true;
+  stallRetries = 0;      // محاولة يدوية جديدة تستحق نافذتي إعادة محاولة من جديد
   const settled = new Promise((resolve) => {
     const timer = setTimeout(() => {
       detach();
@@ -138,7 +225,9 @@ async function checkNow() {
 }
 
 function status() {
-  return { packaged: app.isPackaged, version: app.getVersion(), name: app.getName(), downloading, lastCheck };
+  updater(); // أول قراءة للحالة تُوصّل الأحداث، فلا يراقب شيء تنزيلاً لم يُسمع بعد
+  return { packaged: app.isPackaged, version: app.getVersion(), name: app.getName(),
+    downloading, lastCheck };
 }
 
 module.exports = { initAutoUpdater, checkNow, status, promptInstall };
