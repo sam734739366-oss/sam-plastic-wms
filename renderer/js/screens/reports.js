@@ -13,7 +13,7 @@ function dateInput(id, value = '') {
 }
 
 function selectHtml(id, options) {
-  return `<select id="${id}">${options.map(o => `<option value="${o.value}">${esc(o.label)}</option>`).join('')}</select>`;
+  return `<select id="${id}">${options.map(o => `<option value="${o.value}"${o.selected ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
 }
 
 function tableHtml(columns, rows) {
@@ -24,22 +24,179 @@ function tableHtml(columns, rows) {
 register('reports', {
   title: 'التقارير',
   async mount(el) {
-    const [items, warehouses, parties, machines, users] = await Promise.all([
+    const [items, warehouses, parties, machines, users, shiftsList, meta] = await Promise.all([
       api.invoke('items:list'),
       api.invoke('warehouses:list'),
       api.invoke('parties:list'),
       api.invoke('machines:list'),
       api.invoke('users:list'),
+      api.invoke('shifts:list'),
+      api.invoke('reports:meta'),
     ]);
 
+    // ===== فلاتر مشتركة للتقارير السبعة =====
+    // المخزن: الرئيسي أولًا ومختارًا، ثم بقية المخازن، ثم «كل المخازن» لتجميع الكل.
+    const mainWhId = meta && meta.mainWarehouseId ? meta.mainWarehouseId : (warehouses.length ? warehouses[0].id : null);
+    const whField = () => `<div class="field"><label>المخزن</label>${selectHtml('r-warehouse',
+      [...warehouses.map(w => ({ value: w.id, label: w.id === mainWhId ? `${w.name} (الرئيسي)` : w.name, selected: w.id === mainWhId })),
+        { value: 'all', label: 'كل المخازن' }])}</div>`;
+    const unitField = () => `<div class="field"><label>وحدة العرض</label>${selectHtml('r-unit',
+      [{ value: 'pieces', label: 'حبة/عبوة', selected: true }, { value: 'carton', label: 'كرتون' }, { value: 'bag', label: 'كيس' }])}</div>`;
+    const dateFields = () => `<div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
+      <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>`;
+    const partyField = (label, list, allLabel) => `<div class="field"><label>${label}</label>${selectHtml('r-party',
+      [{ value: '', label: allLabel }, ...list.map(p => ({ value: p.id, label: p.name }))])}</div>`;
+    const getWh = (node) => (node.value === 'all' ? 'all' : (Number(node.value) || null));
+    const getUnit = (node) => (node && node.value ? node.value : 'pieces');
+    const dash = (v) => (v === null || v === undefined ? '—' : N(v));
+    // كل تقرير يعطي نفس الرباعية: مدى تاريخ + مخزن ذكي + وحدة عرض، ثم زياداته الخاصة
+    const baseFilters = (root) => ({
+      from: root.querySelector('#r-from') ? root.querySelector('#r-from').value || null : null,
+      to: root.querySelector('#r-to') ? root.querySelector('#r-to').value || null : null,
+      unit: getUnit(root.querySelector('#r-unit')),
+      warehouseId: root.querySelector('#r-warehouse') ? getWh(root.querySelector('#r-warehouse')) : 'all',
+    });
+
     const REPORTS = {
+      // 1) المشتريات — مستوى البند
+      purchases: {
+        label: 'تقرير المشتريات',
+        filterHtml: () => `${dateFields()}
+          ${partyField('المورد', parties.filter(p => p.type !== 'customer'), 'كل الموردين')}
+          ${whField()}${unitField()}`,
+        getFilters: (root) => ({ ...baseFilters(root), partyId: Number(root.querySelector('#r-party').value) || null }),
+        columns: [
+          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
+          { key: 'doc_number', label: 'رقم الفاتورة', cell: r => r.doc_number },
+          { key: 'party_name', label: 'المورد', cell: r => r.party_name || '—' },
+          { key: 'code', label: 'كود الصنف', cell: r => r.code },
+          { key: 'name', label: 'الصنف', cell: r => r.name },
+          { key: 'qty_label', label: 'الكمية', cell: r => r.qty_label },
+        ],
+        foot: (data) => `<div class="notes"><b>إجمالي الكميات: ${data.total_qty_label} — عدد البنود: ${data.rows.length}</b></div>`,
+      },
+      // 2) المنصرف للإنتاج — بلا مكينة ولا وردية
+      issues: {
+        label: 'المنصرف للإنتاج',
+        filterHtml: () => `${dateFields()}${whField()}${unitField()}`,
+        getFilters: (root) => baseFilters(root),
+        columns: [
+          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
+          { key: 'doc_number', label: 'رقم التصريح', cell: r => r.doc_number },
+          { key: 'code', label: 'كود الصنف', cell: r => r.code },
+          { key: 'name', label: 'الصنف', cell: r => r.name },
+          { key: 'source', label: 'المصدر', cell: r => (r.source === 'customer' ? 'خام عميل' : 'خام المصنع') },
+          { key: 'qty_label', label: 'الكمية', cell: r => r.qty_label },
+        ],
+        foot: (data) => `<div class="notes"><b>إجمالي المصروف: ${data.total_qty_label} — عدد البنود: ${data.rows.length}</b></div>`,
+      },
+      // 3) الخروج للعملاء — فواتير البيع بقيمتها
+      sales: {
+        label: 'الخروج للعملاء',
+        filterHtml: () => `${dateFields()}
+          ${partyField('العميل', parties.filter(p => p.type !== 'supplier'), 'كل العملاء')}
+          ${whField()}${unitField()}`,
+        getFilters: (root) => ({ ...baseFilters(root), partyId: Number(root.querySelector('#r-party').value) || null }),
+        columns: [
+          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
+          { key: 'invoice_number', label: 'رقم الفاتورة', cell: r => r.invoice_number },
+          { key: 'party_name', label: 'العميل', cell: r => r.party_name || '—' },
+          { key: 'code', label: 'كود الصنف', cell: r => r.code },
+          { key: 'name', label: 'الصنف', cell: r => r.name },
+          { key: 'qty_label', label: 'الكمية', cell: r => r.qty_label },
+          { key: 'value', label: 'قيمة البند (ريال)', cell: r => fmtMoney(r.value) },
+        ],
+        foot: (data) => `<div class="notes"><b>إجمالي الكميات: ${data.total_qty_label} — إجمالي القيم: ${fmtMoney(data.total)} — عدد البنود: ${data.rows.length}</b></div>`,
+      },
+      // 4) الإنتاج اليومي لكل كرتون
+      production: {
+        label: 'الإنتاج اليومي',
+        filterHtml: () => `${dateFields()}
+          <div class="field"><label>المكينة</label>${selectHtml('r-machine', [{ value: '', label: 'كل المكاين' }, ...machines.map(m => ({ value: m.id, label: m.name }))])}</div>
+          <div class="field"><label>الوردية</label>${selectHtml('r-shift', [{ value: '', label: 'كل الورديات' }, ...shiftsList.map(s => ({ value: s.id, label: s.name }))])}</div>
+          ${whField()}${unitField()}`,
+        getFilters: (root) => ({
+          ...baseFilters(root),
+          machineId: Number(root.querySelector('#r-machine').value) || null,
+          shiftId: Number(root.querySelector('#r-shift').value) || null,
+        }),
+        columns: [
+          { key: 'result_date', label: 'التاريخ', cell: r => r.result_date },
+          { key: 'machine_name', label: 'المكينة', cell: r => r.machine_name || '—' },
+          { key: 'shift_name', label: 'الوردية', cell: r => r.shift_name || '—' },
+          { key: 'carton_number', label: 'رقم الكرتون', cell: r => r.carton_number },
+          { key: 'name', label: 'الصنف', cell: r => r.name },
+          { key: 'carton_pieces_label', label: 'حبات الكرتون', cell: r => r.carton_pieces_label },
+          { key: 'good_pieces_label', label: 'سليم', cell: r => r.good_pieces_label },
+          { key: 'defect_before_label', label: 'تالف قبل', cell: r => r.defect_before_label },
+          { key: 'defect_after_label', label: 'تالف بعد', cell: r => r.defect_after_label },
+          { key: 'variance_label', label: 'الفارق', cell: r => r.variance_label },
+          { key: 'used_bags', label: 'أكياس مستخدمة', cell: r => dash(r.used_bags) },
+          { key: 'breaks', label: 'كسور', cell: r => dash(r.breaks) },
+        ],
+        foot: (data) => `<div class="notes"><b>سليم: ${N(data.total_good)} حبة — تالف: ${N(data.total_defect)} حبة — فارق: ${N(data.total_variance)} حبة — أكياس: ${N(data.total_bags)}</b></div>`,
+      },
+      // 5) العهَد: النفخ للغير
+      tolling: {
+        label: 'تقرير العهَد (للغير)',
+        filterHtml: () => `${dateFields()}
+          ${partyField('العميل', parties.filter(p => p.type !== 'supplier'), 'كل العملاء')}${unitField()}`,
+        getFilters: (root) => ({
+          from: root.querySelector('#r-from').value || null,
+          to: root.querySelector('#r-to').value || null,
+          unit: getUnit(root.querySelector('#r-unit')),
+          partyId: Number(root.querySelector('#r-party').value) || null,
+        }),
+        columns: [
+          { key: 'party_name', label: 'العميل', cell: r => r.party_name },
+          { key: 'raw_in_label', label: 'إجمالي الخام المستلم', cell: r => r.raw_in_label },
+          { key: 'delivered_label', label: 'إجمالي المسلَّم', cell: r => r.delivered_label },
+          { key: 'customer_defects_label', label: 'تالف العميل', cell: r => r.customer_defects_label },
+          { key: 'remaining_label', label: 'الرصيد المتبقي', cell: r => r.remaining_label },
+        ],
+        foot: (data) => `<div class="notes"><b>الإجماليات — خام: ${N(data.total_raw)} حبة — مسلَّم: ${N(data.total_delivered)} حبة — تالف العملاء: ${N(data.total_defects)} حبة — متبقٍ: ${N(data.total_remaining)} حبة</b></div>`,
+      },
+      // 6) التالف ومصدره
+      scrap: {
+        label: 'تقرير التالف',
+        filterHtml: () => `${dateFields()}${whField()}${unitField()}`,
+        getFilters: (root) => baseFilters(root),
+        columns: [
+          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
+          { key: 'doc_number', label: 'رقم السند', cell: r => r.doc_number },
+          { key: 'name', label: 'الصنف', cell: r => r.name },
+          { key: 'source_label', label: 'المصدر', cell: r => r.source_label },
+          { key: 'qty_label', label: 'الكمية', cell: r => r.qty_label },
+          { key: 'disposition', label: 'المصير', cell: r => DISP_LABEL[r.disposition] || r.disposition },
+        ],
+        foot: (data) => `<div class="notes"><b>إجمالي التالف: ${data.total_qty_label} — عدد السندات: ${data.rows.length}</b></div>`,
+      },
+      // 7) أرصدة المخازن: مخزن × صنف بثلاث سلل
+      stockBalances: {
+        label: 'أرصدة المخازن',
+        filterHtml: () => `
+          <div class="field"><label>الصنف</label>${selectHtml('r-item', [{ value: '', label: 'كل الأصناف' }, ...items.map(i => ({ value: i.id, label: `${i.code} — ${i.name}` }))])}</div>
+          ${whField()}${unitField()}`,
+        getFilters: (root) => ({
+          unit: getUnit(root.querySelector('#r-unit')),
+          warehouseId: getWh(root.querySelector('#r-warehouse')),
+          itemId: Number(root.querySelector('#r-item').value) || null,
+        }),
+        columns: [
+          { key: 'warehouse_name', label: 'المخزن', cell: r => r.warehouse_name },
+          { key: 'code', label: 'كود الصنف', cell: r => r.code },
+          { key: 'name', label: 'الصنف', cell: r => r.name },
+          { key: 'qty_salem_label', label: 'سليم', cell: r => r.qty_salem_label },
+          { key: 'qty_talef_label', label: 'تالف', cell: r => r.qty_talef_label },
+          { key: 'qty_muharraz_label', label: 'محرز', cell: r => r.qty_muharraz_label },
+          { key: 'total_pieces_label', label: 'الإجمالي', cell: r => r.total_pieces_label },
+        ],
+        foot: (data) => `<div class="notes"><b>عبر المخازن — سليم: ${N(data.total_salem)} — تالف: ${N(data.total_talef)} — محرز: ${N(data.total_muharraz)} — الحبات: ${N(data.total_pieces)}</b></div>`,
+      },
       inventory: {
         label: 'جرد المخزون',
-        filterHtml: () => `
-          <div class="field"><label>المخزن</label>${selectHtml('r-warehouse', [{ value: '', label: 'كل المخازن' }, ...warehouses.map(w => ({ value: w.id, label: w.name }))])}</div>`,
-        getFilters: (el) => ({
-          warehouseId: Number(el.querySelector('#r-warehouse').value) || null,
-        }),
+        filterHtml: () => `<div class="field"><label>المخزن</label>${selectHtml('r-warehouse', [{ value: '', label: 'كل المخازن' }, ...warehouses.map(w => ({ value: w.id, label: w.name }))])}</div>`,
+        getFilters: (root) => ({ warehouseId: root.querySelector('#r-warehouse').value || null }),
         columns: [
           { key: 'code', label: 'الكود', cell: r => r.code },
           { key: 'name', label: 'الصنف', cell: r => r.name },
@@ -63,13 +220,12 @@ register('reports', {
         filterHtml: () => `
           <div class="field"><label>الصنف</label>${selectHtml('r-item', [{ value: '', label: 'كل الأصناف' }, ...items.map(i => ({ value: i.id, label: `${i.code} — ${i.name}` }))])}</div>
           <div class="field"><label>المخزن</label>${selectHtml('r-warehouse', [{ value: '', label: 'كل المخازن' }, ...warehouses.map(w => ({ value: w.id, label: w.name }))])}</div>
-          <div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
-          <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>`,
-        getFilters: (el) => ({
-          itemId: Number(el.querySelector('#r-item').value) || null,
-          warehouseId: Number(el.querySelector('#r-warehouse').value) || null,
-          from: el.querySelector('#r-from').value || null,
-          to: el.querySelector('#r-to').value || null,
+          ${dateFields()}`,
+        getFilters: (root) => ({
+          itemId: Number(root.querySelector('#r-item').value) || null,
+          warehouseId: root.querySelector('#r-warehouse').value || null,
+          from: root.querySelector('#r-from').value || null,
+          to: root.querySelector('#r-to').value || null,
         }),
         columns: [
           { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
@@ -96,116 +252,14 @@ register('reports', {
           return `<div class="notes"><b>الإجمالي — داخل: ${N(pin)} حبة — خارج: ${N(pout)} حبة — الصافي: ${N(pin - pout)} حبة${showW ? ` &nbsp;|&nbsp; الوزن: داخل ${N(win, 2)} كجم — خارج ${N(wout, 2)} كجم — الصافي ${N(win - wout, 2)} كجم` : ''}</b></div>`;
         },
       },
-      production: {
-        label: 'تقرير الإنتاج',
-        filterHtml: () => `
-          <div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
-          <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>
-          <div class="field"><label>المكينة</label>${selectHtml('r-machine', [{ value: '', label: 'كل المكاين' }, ...machines.map(m => ({ value: m.id, label: m.name }))])}</div>`,
-        getFilters: (el) => ({
-          from: el.querySelector('#r-from').value || null,
-          to: el.querySelector('#r-to').value || null,
-          machineId: Number(el.querySelector('#r-machine').value) || null,
-        }),
-        columns: [
-          { key: 'result_date', label: 'التاريخ', cell: r => r.result_date },
-          { key: 'carton_number', label: 'الكرتون', cell: r => r.carton_number },
-          { key: 'item', label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
-          { key: 'issue_number', label: 'تصريح الصرف', cell: r => r.issue_number },
-          { key: 'machine_name', label: 'المكينة', cell: r => r.machine_name || '—' },
-          { key: 'shift_name', label: 'الوردية', cell: r => r.shift_name || '—' },
-          { key: 'good_pieces', label: 'سليم', cell: r => N(r.good_pieces) },
-          { key: 'defect_before', label: 'تالف قبل', cell: r => N(r.defect_before) },
-          { key: 'defect_after', label: 'تالف بعد', cell: r => N(r.defect_after) },
-          { key: 'total_pieces', label: 'الإجمالي', cell: r => N(r.total_pieces) },
-          { key: 'notes', label: 'ملاحظات', cell: r => r.notes || '' },
-        ],
-        foot: (data) => {
-          const rows = Array.isArray(data) ? data : data.rows;
-          const g = rows.reduce((s, r) => s + r.good_pieces, 0);
-          const b = rows.reduce((s, r) => s + r.defect_before, 0);
-          const a = rows.reduce((s, r) => s + r.defect_after, 0);
-          return `<div class="notes"><b>الإجمالي — سليم: ${N(g)} &nbsp; تالف قبل: ${N(b)} &nbsp; تالف بعد: ${N(a)} &nbsp; الكراتين: ${rows.length}</b></div>`;
-        },
-      },
-      scrap: {
-        label: 'تقرير التوالف ومصائرها',
-        filterHtml: () => `
-          <div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
-          <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>`,
-        getFilters: (el) => ({
-          from: el.querySelector('#r-from').value || null,
-          to: el.querySelector('#r-to').value || null,
-        }),
-        columns: [
-          { key: 'doc_number', label: 'الرقم', cell: r => r.doc_number },
-          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
-          { key: 'item', label: 'الصنف', cell: r => `${r.code} — ${r.name}` },
-          { key: 'disposition', label: 'المصير', cell: r => DISP_LABEL[r.disposition] || r.disposition },
-          { key: 'warehouse_name', label: 'المخزن', cell: r => r.warehouse_name || '—' },
-          { key: 'party_name', label: 'الطرف', cell: r => r.party_name || '—' },
-          { key: 'pieces', label: 'الحبات', cell: r => N(r.pieces) },
-          { key: 'weight_kg', label: 'الوزن كجم', weight: true, cell: r => N(r.weight_kg, 2) },
-          { key: 'price', label: 'السعر', cell: r => r.price ? N(r.price, 2) : '—' },
-        ],
-        foot: (data, cols) => {
-          const rows = Array.isArray(data) ? data : data.rows;
-          const showW = cols.some(c => c.key === 'weight_kg');
-          return `<div class="notes"><b>إجمالي الحبات: ${N(rows.reduce((s, r) => s + r.pieces, 0))}${showW ? ` — الوزن: ${N(rows.reduce((s, r) => s + r.weight_kg, 0), 2)} كجم` : ''}</b></div>`;
-        },
-      },
-      purchases: {
-        label: 'تقرير المشتريات',
-        filterHtml: () => `
-          <div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
-          <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>
-          <div class="field"><label>المورد</label>${selectHtml('r-party', [{ value: '', label: 'كل الموردين' }, ...parties.filter(p => p.type !== 'customer').map(p => ({ value: p.id, label: p.name }))])}</div>`,
-        getFilters: (el) => ({
-          from: el.querySelector('#r-from').value || null,
-          to: el.querySelector('#r-to').value || null,
-          partyId: Number(el.querySelector('#r-party').value) || null,
-        }),
-        columns: [
-          { key: 'doc_number', label: 'الرقم', cell: r => r.doc_number },
-          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
-          { key: 'party_name', label: 'المورد', cell: r => r.party_name || '—' },
-          { key: 'total_pieces', label: 'الحبات', cell: r => N(r.total_pieces) },
-          { key: 'total', label: 'الإجمالي', cell: r => fmtMoney(r.total) },
-        ],
-        foot: (data) => `<div class="notes"><b>إجمالي المشتريات: ${fmtMoney(data.total)} — عدد الفواتير: ${data.rows.length}</b></div>`,
-      },
-      sales: {
-        label: 'فواتير البيع المرحلة',
-        filterHtml: () => `
-          <div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
-          <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>
-          <div class="field"><label>العميل</label>${selectHtml('r-party', [{ value: '', label: 'كل العملاء' }, ...parties.filter(p => p.type !== 'supplier').map(p => ({ value: p.id, label: p.name }))])}</div>`,
-        getFilters: (el) => ({
-          from: el.querySelector('#r-from').value || null,
-          to: el.querySelector('#r-to').value || null,
-          partyId: Number(el.querySelector('#r-party').value) || null,
-        }),
-        columns: [
-          { key: 'doc_number', label: 'الرقم', cell: r => r.doc_number },
-          { key: 'doc_date', label: 'التاريخ', cell: r => r.doc_date },
-          { key: 'party_name', label: 'العميل', cell: r => r.party_name || '—' },
-          { key: 'invoice_type', label: 'النوع', cell: r => r.invoice_type === 'sale' ? 'بيع' : r.invoice_type },
-          { key: 'total_pieces', label: 'الحبات', cell: r => N(r.total_pieces) },
-          { key: 'total', label: 'الإجمالي', cell: r => fmtMoney(r.total) },
-          { key: 'notes', label: 'ملاحظات', cell: r => r.notes || '' },
-        ],
-        foot: (data) => `<div class="notes"><b>إجمالي الفواتير: ${fmtMoney(data.total)} — عددها: ${data.rows.length} — الحبات: ${N(data.rows.reduce((s, r) => s + (Number(r.total_pieces) || 0), 0))}</b></div>`,
-      },
       audit: {
         label: 'سجل التدقيق',
-        filterHtml: () => `
-          <div class="field"><label>من تاريخ</label>${dateInput('r-from')}</div>
-          <div class="field"><label>إلى تاريخ</label>${dateInput('r-to')}</div>
+        filterHtml: () => `${dateFields()}
           <div class="field"><label>المستخدم</label>${selectHtml('r-user', [{ value: '', label: 'كل المستخدمين' }, ...users.map(u => ({ value: u.id, label: u.username }))])}</div>`,
-        getFilters: (el) => ({
-          from: el.querySelector('#r-from').value || null,
-          to: el.querySelector('#r-to').value || null,
-          userId: Number(el.querySelector('#r-user').value) || null,
+        getFilters: (root) => ({
+          from: root.querySelector('#r-from').value || null,
+          to: root.querySelector('#r-to').value || null,
+          userId: Number(root.querySelector('#r-user').value) || null,
         }),
         columns: [
           { key: 'created_at', label: 'الوقت', cell: r => r.created_at },
@@ -231,7 +285,7 @@ register('reports', {
     };
     const saveCols = (kind, keys) => localStorage.setItem(COL_KEY(kind), JSON.stringify(keys));
 
-    let kind = 'inventory';
+    let kind = 'purchases';
     let last = null;
 
     el.innerHTML = `

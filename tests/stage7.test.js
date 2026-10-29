@@ -102,7 +102,7 @@ test('reports:movement computes running balance in date order', () => {
   assert.equal(rows[1].doc_type, 'invoice');
 });
 
-test('reports:production lists results with carton, issue and totals', () => {
+test('reports:production lists per-carton rows with accounted and variance', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'issues', 'production', 'reports']);
   db.prepare('UPDATE items SET pieces_per_carton=100 WHERE id=1').run();
@@ -121,15 +121,21 @@ test('reports:production lists results with carton, issue and totals', () => {
     carton_id: cartons[0].id, result_date: '2026-10-11',
     good_pieces: 90, defect_before: 5, defect_after: 4
   }, 1);
-  const rows = h['reports:production'](null, { from: '2026-10-01', to: '2026-10-31' });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].carton_number, cartons[0].carton_number);
-  assert.equal(rows[0].issue_number, 'I-1');
-  assert.equal(rows[0].total_pieces, 99);
-  assert.equal(h['reports:production'](null, { from: '2026-11-01' }).length, 0);
+  const data = h['reports:production'](null, { from: '2026-10-01', to: '2026-10-31' });
+  assert.equal(data.rows.length, 1);
+  const row = data.rows[0];
+  assert.equal(row.carton_number, cartons[0].carton_number);
+  assert.equal(row.carton_pieces, 100);
+  assert.equal(row.accounted, 99);
+  assert.equal(row.variance, 1, 'الفارق = حبات الكرتون − (سليم + تالف قبل + تالف بعد)');
+  assert.equal(row.good_pieces_label, '90 حبة');
+  assert.equal(data.total_good, 90);
+  assert.equal(data.total_defect, 9);
+  assert.equal(data.total_variance, 1);
+  assert.equal(h['reports:production'](null, { from: '2026-11-01' }).rows.length, 0);
 });
 
-test('reports:scrap lists active scrap with disposition labels data', () => {
+test('reports:scrap lists active scrap rows with a source label', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'scrap', 'reports']);
   stockIn(db, h, 1, 2, 300);
@@ -137,13 +143,15 @@ test('reports:scrap lists active scrap with disposition labels data', () => {
     doc_number: 'S-1', doc_date: '2026-10-15', item_id: 2,
     disposition: 'to_recycled', warehouse_id: 1, pieces: 50, weight_kg: 2.6
   }, 1);
-  const rows = h['reports:scrap'](null, {});
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].disposition, 'to_recycled');
-  assert.equal(rows[0].pieces, 50);
+  const data = h['reports:scrap'](null, {});
+  assert.equal(data.rows.length, 1);
+  assert.equal(data.rows[0].disposition, 'to_recycled');
+  assert.equal(data.rows[0].qty, 50);
+  assert.equal(data.rows[0].source_label, 'سند يدوي', 'غير مرتبط بأي نتيجة إنتاج');
+  assert.equal(data.total_qty, 50);
 });
 
-test('reports:purchases and reports:sales aggregate totals', () => {
+test('reports:purchases (item lines) and reports:sales (value per line) totals', () => {
   const db = makeDb(); setDb(db);
   const h = stubIpc(['purchases', 'sales', 'reports']);
   h['purchases:save'](null, {
@@ -155,11 +163,16 @@ test('reports:purchases and reports:sales aggregate totals', () => {
     items: [{ item_id: 1, warehouse_id: 1, quantity: 40, unit: 'حبة', unit_price: 12 }]
   }, 1);
   const p = h['reports:purchases'](null, { from: '2026-10-01' });
-  assert.equal(p.total, 500);
-  assert.equal(p.total_pieces, 100);
+  assert.equal(p.rows.length, 1, 'سطر لكل بند صنف، لا لكل فاتورة');
+  assert.equal(p.rows[0].qty, 100);
+  assert.equal(p.rows[0].party_name, 'مورد تجريبي');
+  assert.equal(p.rows[0].doc_number, 'P-1');
+  assert.equal(p.total_qty, 100);
+  assert.equal(p.total_qty_label, '100 حبة');
   const s = h['reports:sales'](null, { from: '2026-10-01' });
   assert.equal(s.total, 480);
-  assert.equal(s.rows[0].invoice_type, 'sale');
+  assert.equal(s.rows[0].qty, 40);
+  assert.equal(s.rows[0].value, 480);
   assert.equal(h['reports:sales'](null, { partyId: 1 }).rows.length, 0);
 });
 
